@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from xml.etree import ElementTree as ET
 
-PROCESSOR_VERSION = "documents-v1"
+PROCESSOR_VERSION = "documents-v2"
 SUPPORTED_SUFFIXES = {".txt", ".md", ".docx"}
 
 _CONTRACT_RE = re.compile(
@@ -75,6 +75,22 @@ def _first_date(pattern: str, text: str) -> str | None:
     return _iso_date(text[match.end():match.end() + 180])
 
 
+def _first_date_with_source(pattern: str, text: str) -> tuple[str | None, str | None]:
+    anchor = re.search(pattern, text, re.IGNORECASE)
+    if not anchor:
+        return None, None
+    window_end = min(len(text), anchor.end() + 180)
+    window = text[anchor.end():window_end]
+    date_match = _NUMERIC_DATE_RE.search(window) or _WORD_DATE_RE.search(window)
+    if not date_match:
+        return None, None
+    value = _iso_date(date_match.group(0))
+    if not value:
+        return None, None
+    source = " ".join(text[anchor.start():anchor.end() + date_match.end()].split())
+    return value, source
+
+
 def _extract_metadata(source_file: str, text: str) -> dict[str, Any]:
     title_part = PurePosixPath(source_file).stem.split("__")[-1].replace("_", " ").strip()
     nonempty_lines = [line.strip().lstrip("\ufeff") for line in text.splitlines() if line.strip()]
@@ -131,6 +147,7 @@ def _extract_metadata(source_file: str, text: str) -> dict[str, Any]:
 
     edition = _first_date(r"редакци(?:я|и)\s+от", text)
     first_lines = "\n".join(text.splitlines()[:6])
+    signed_date_source = None
     if document_type in {"agreement", "amendment"}:
         signed_date = None
         for line in first_lines.splitlines():
@@ -140,27 +157,56 @@ def _extract_metadata(source_file: str, text: str) -> dict[str, Any]:
             if separator:
                 signed_date = _iso_date(line[separator.end():])
                 if signed_date:
+                    signed_date_source = " ".join(line.split())
                     break
     elif document_type == "letter":
-        signed_date = _first_date(r"\bот\s+", first_lines)
+        signed_date, signed_date_source = _first_date_with_source(r"\bот\s+", first_lines)
     else:
         signed_date = None
-    approval_date = _first_date(r"утвержд[её]н[ао]?\s+[^.\n]{0,100}?\bот\s+", text)
+    approval_date, approval_date_source = _first_date_with_source(
+        r"утвержд[её]н[ао]?\s+[^.\n]{0,100}?\bот\s+",
+        text,
+    )
+    effective_date_source = None
     if signed_date and re.search(r"вступает в силу с (?:даты|момента) подписания", text, re.IGNORECASE):
         effective_date = signed_date
+        effective_match = re.search(
+            r"вступает в силу с (?:даты|момента) подписания[^.\n]*",
+            text,
+            re.IGNORECASE,
+        )
+        effective_date_source = (
+            " ".join(effective_match.group(0).split()) if effective_match else signed_date_source
+        )
     else:
-        effective_date = _first_date(r"(?:вступает в силу с|вступил[ао]? в силу с)", text)
-    valid_from = _first_date(r"(?:действует с|действует начиная с)", text)
+        effective_date, effective_date_source = _first_date_with_source(
+            r"(?:вступает в силу с|вступил[ао]? в силу с)",
+            text,
+        )
+    valid_from, valid_from_source = _first_date_with_source(
+        r"(?:действует с|действует начиная с)",
+        text,
+    )
     if valid_from is None:
         valid_from = effective_date
+        valid_from_source = effective_date_source
 
-    valid_to = _first_date(
+    valid_to, valid_to_source = _first_date_with_source(
         r"(?:утрат(?:ил|ила|ило|или)\s+силу\s+с|действует\s+до|действовал[ао]?\s+до)",
         text,
     )
     if valid_to and re.search(r"(?:действует|действовал[ао]?)\s+до", text, re.IGNORECASE):
         end_date = date.fromisoformat(valid_to) + timedelta(days=1)
         valid_to = end_date.isoformat()
+        valid_to_source = f"{valid_to_source} (исключительная граница: {valid_to})"
+    snapshot_date, snapshot_date_source = _first_date_with_source(
+        r"(?:дата\s+выгрузки|дата\s+снимка|дата\s+получения\s+редакции)\s*[:—-]?\s*",
+        text[:2000],
+    )
+    current_only = document_type == "law" and (
+        snapshot_date is not None
+        or bool(re.search(r"(?:^|[_\s])действующ(?:ая|его|ей|ую)(?:[_\s.]|$)", normalized_name))
+    )
     applicability_conditions: list[dict[str, str]] = []
     if document_type == "amendment":
         for line in text.splitlines():
@@ -196,6 +242,24 @@ def _extract_metadata(source_file: str, text: str) -> dict[str, Any]:
         uncertainties.append("Дата начала действия документа в тексте явно не указана.")
     if document_type == "law" and not valid_from and not valid_to:
         uncertainties.append("Исторический период действия этой редакции не указан.")
+    if current_only and snapshot_date and not valid_from and not valid_to:
+        uncertainties.append(
+            "Дата выгрузки подтверждает только состояние источника на эту дату, но не период действия нормы."
+        )
+    if current_only and not snapshot_date:
+        uncertainties.append("Дата выгрузки текущей редакции закона в тексте не указана.")
+    date_sources = [
+        {"kind": kind, "source_text": source}
+        for kind, source in (
+            ("signed_date", signed_date_source),
+            ("approval_date", approval_date_source),
+            ("effective_date", effective_date_source),
+            ("valid_from", valid_from_source),
+            ("valid_to", valid_to_source),
+            ("snapshot_date", snapshot_date_source),
+        )
+        if source
+    ]
     if document_type in {"agreement", "amendment"} and not contract_number:
         uncertainties.append("Номер договора не удалось извлечь из документа.")
     if document_type == "amendment" and not source_contract_number:
@@ -211,10 +275,20 @@ def _extract_metadata(source_file: str, text: str) -> dict[str, Any]:
         "counterparties": counterparties,
         "edition": edition,
         "signed_date": signed_date,
+        "signed_date_source": signed_date_source,
         "approval_date": approval_date,
+        "approval_date_source": approval_date_source,
         "effective_date": effective_date,
+        "effective_date_source": effective_date_source,
         "valid_from": valid_from,
+        "valid_from_source": valid_from_source,
         "valid_to": valid_to,
+        "valid_to_source": valid_to_source,
+        "snapshot_date": snapshot_date,
+        "snapshot_date_source": snapshot_date_source,
+        "date_sources": date_sources,
+        "current_only": current_only,
+        "date_uncertainties": list(uncertainties),
         "applicability_conditions": applicability_conditions,
         "uncertainties": uncertainties,
     }

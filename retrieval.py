@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import csv
 import hashlib
 import json
+import logging
 import math
+import os
 import re
 import sys
 import time
@@ -16,8 +20,10 @@ from pathlib import Path
 from typing import Any
 
 from documents import PROCESSOR_VERSION, load_documents, split_document
+from llm_client import LLMClient, ModelAPIError, ModelProtocolError, Settings
 
-RETRIEVAL_VERSION = "retrieval-v1"
+RETRIEVAL_VERSION = "retrieval-v2"
+logger = logging.getLogger(__name__)
 _TOKEN_RE = re.compile(
     r"[a-zа-яё]+\s*[-–—]\s*\d+(?:\s*/\s*\d+)?|"
     r"\d+(?:\s*[-–—/]\s*\d+)+|[a-zа-яё0-9]+",
@@ -268,11 +274,18 @@ class SearchIndex:
         query: str,
         filters: dict[str, Any] | None = None,
         top_k: int = 10,
+        *,
+        ranking: str = "bm25",
+        dense_scores: dict[str, float] | None = None,
     ) -> list[dict[str, Any]]:
         if not isinstance(query, str) or not query.strip():
             raise ValueError("Поисковый запрос не должен быть пустым.")
         if top_k < 1:
             raise ValueError("top_k должен быть не меньше 1.")
+        if ranking not in {"bm25", "semantic", "hybrid"}:
+            raise ValueError(f"Неизвестный режим поиска: {ranking!r}")
+        if ranking != "bm25" and dense_scores is None:
+            raise ValueError("Для семантического поиска нужны оценки dense retrieval.")
         filters = dict(filters or {})
         query_tokens = _tokens(query)
         query_contracts = {_normalize_contract(match.group(1)) for match in _CONTRACT_RE.finditer(query)}
@@ -295,6 +308,8 @@ class SearchIndex:
         query_references = {match.group(1).rstrip(".") for match in _REFERENCE_RE.finditer(query)}
         as_of = _date(filters.get("as_of") or filters.get("valid_on") or filters.get("event_date"))
         spec_date = _date(filters.get("specification_signed_at"))
+        signed_date = _date(filters.get("signed_at"))
+        snapshot_date = _date(filters.get("snapshot_date"))
         wanted_contract = filters.get("contract_number")
         wanted_contract = _normalize_contract(str(wanted_contract)) if wanted_contract else None
         requested_contract = wanted_contract or (
@@ -327,15 +342,27 @@ class SearchIndex:
                 document_contract = document.get("contract_number")
                 if document_contract and document_contract != requested_contract:
                     continue
-                if not document_contract and document["document_id"] not in related_context_ids:
+                document_type = document.get("document_type")
+                globally_applicable = document_type in {"law", "internal_policy"}
+                if (
+                    not document_contract
+                    and document["document_id"] not in related_context_ids
+                    and not globally_applicable
+                ):
                     continue
             if wanted_party:
                 parties = {_party_key(name) for name in document.get("counterparties", [])}
-                if not parties or wanted_party not in parties:
+                is_global_context = requested_contract and document.get("document_type") in {
+                    "law", "internal_policy", "letter"
+                }
+                if (not parties or wanted_party not in parties) and not is_global_context:
                     continue
             if wanted_parties:
                 parties = {_party_key(name) for name in document.get("counterparties", [])}
-                if not parties.intersection(wanted_parties):
+                is_global_context = requested_contract and document.get("document_type") in {
+                    "law", "internal_policy", "letter"
+                }
+                if not parties.intersection(wanted_parties) and not is_global_context:
                     continue
             if wanted_type and document.get("document_type") != wanted_type:
                 continue
@@ -343,6 +370,10 @@ class SearchIndex:
                 (document.get("valid_from") and as_of < document["valid_from"])
                 or (document.get("valid_to") and as_of >= document["valid_to"])
             ):
+                continue
+            if signed_date and document.get("signed_date") and document["signed_date"] != signed_date:
+                continue
+            if snapshot_date and document.get("snapshot_date") != snapshot_date:
                 continue
             applicability = evaluate_applicability(chunk, spec_date)
             if only_applicable and applicability["status"] == "not_applicable":
@@ -374,9 +405,71 @@ class SearchIndex:
                     score += 4.0
             if spec_date and applicability["status"] == "applicable":
                 score += 0.5
-            if score > 0:
+            dense_score = dense_scores.get(chunk["chunk_id"]) if dense_scores is not None else None
+            if score > 0 or (ranking != "bm25" and dense_score is not None):
                 scored.append((score, position))
 
+        lexical_scores = {position: score for score, position in scored}
+        if ranking == "semantic":
+            scored = [
+                (float(dense_scores[self.chunks[position]["chunk_id"]]), position)
+                for _, position in scored
+            ]
+        elif ranking == "hybrid":
+            lexical_order = sorted(
+                lexical_scores,
+                key=lambda position: (
+                    -lexical_scores[position],
+                    self.chunks[position]["source_file"],
+                    self.chunks[position]["start_char"],
+                ),
+            )
+            dense_order = sorted(
+                (position for _, position in scored),
+                key=lambda position: (
+                    -float(dense_scores[self.chunks[position]["chunk_id"]]),
+                    self.chunks[position]["source_file"],
+                    self.chunks[position]["start_char"],
+                ),
+            )
+            lexical_rank = {position: rank for rank, position in enumerate(lexical_order, 1)}
+            dense_rank = {position: rank for rank, position in enumerate(dense_order, 1)}
+            scored = [
+                (
+                    (1.0 / (60 + lexical_rank[position]) if position in lexical_rank else 0.0)
+                    + (1.0 / (60 + dense_rank[position]) if position in dense_rank else 0.0),
+                    position,
+                )
+                for position in dense_rank
+            ]
+        if requested_contract:
+            best_contract_lexical = max(
+                (
+                    lexical_scores.get(position, 0.0)
+                    for position, chunk in enumerate(self.chunks)
+                    if self.documents[chunk["document_id"]].get("contract_number") == requested_contract
+                ),
+                default=0.0,
+            )
+            has_explicit_law_reference = bool(re.search(
+                r"\b(?:закон|кодекс|стать[яеи]|ст\.)\b",
+                normalized_query,
+            )) or any(
+                marker in normalized_query
+                for marker in ("федеральный закон", "тк рф", "нк рф", "коап", "152-фз")
+            )
+            if best_contract_lexical > 0 and not has_explicit_law_reference:
+                scored = [
+                    (score, position)
+                    for score, position in scored
+                    if (
+                        self.documents[self.chunks[position]["document_id"]].get("contract_number")
+                        == requested_contract
+                        or self.documents[self.chunks[position]["document_id"]].get("document_type")
+                        not in {"law", "internal_policy"}
+                        or lexical_scores.get(position, 0.0) >= best_contract_lexical * 0.8
+                    )
+                ]
         scored.sort(key=lambda item: (-item[0], self.chunks[item[1]]["source_file"], self.chunks[item[1]]["start_char"]))
         if requested_contract:
             best_per_document: dict[str, tuple[float, int]] = {}
@@ -398,22 +491,46 @@ class SearchIndex:
             }
             matching_reference_chunks: list[tuple[float, int]] = []
             if target_references:
+                matching_by_document_and_reference: dict[
+                    tuple[str, str], tuple[float, int]
+                ] = {}
+                for score, position in scored:
+                    chunk = self.chunks[position]
+                    document = self.documents[chunk["document_id"]]
+                    reference = chunk.get("section_reference")
+                    if (
+                        document.get("contract_number") == requested_contract
+                        and reference in target_references
+                    ):
+                        matching_by_document_and_reference.setdefault(
+                            (chunk["document_id"], reference),
+                            (score, position),
+                        )
                 for document_id, document in self.documents.items():
                     if document.get("contract_number") != requested_contract:
                         continue
                     for reference in target_references:
-                        matches = [
-                            (score, position)
-                            for score, position in scored
-                            if self.chunks[position]["document_id"] == document_id
-                            and self.chunks[position]["section_reference"] == reference
-                        ]
-                        if matches:
-                            best_match = matches[0]
+                        best_match = matching_by_document_and_reference.get(
+                            (document_id, reference)
+                        )
+                        if best_match:
                             if best_match[1] not in pinned_positions:
                                 matching_reference_chunks.append(best_match)
                                 pinned_positions.add(best_match[1])
             pinned.extend(matching_reference_chunks)
+            general_by_document: dict[str, tuple[float, int]] = {}
+            for score, position in scored:
+                document = self.documents[self.chunks[position]["document_id"]]
+                if (
+                    document.get("document_type") in {"law", "internal_policy"}
+                    or document["document_id"] in related_context_ids
+                ) and lexical_scores.get(position, 0.0) > 0:
+                    general_by_document.setdefault(document["document_id"], (score, position))
+            pinned.extend(
+                item for item in general_by_document.values()
+                if item[1] not in pinned_positions
+            )
+            pinned_positions.update(position for _, position in general_by_document.values())
             scored = pinned + [
                 (score, position) for score, position in scored
                 if position not in pinned_positions
@@ -423,7 +540,7 @@ class SearchIndex:
             evidence = dict(self.chunks[position])
             evidence["score"] = round(score, 6)
             evidence["applicability"] = evaluate_applicability(evidence, spec_date)
-            evidence["retrieval_reason"] = "bm25"
+            evidence["retrieval_reason"] = ranking
             results.append(evidence)
         if top_k > 1 and results:
             available_positions = {position: score for score, position in scored}
@@ -514,6 +631,11 @@ class SchemaSearchBackend:
         self.index = index
         self.client = client
         self.top_k = top_k
+        self._embedding_lock = asyncio.Lock()
+        self._document_vectors: dict[str, list[float]] | None = None
+        self.diagnostics: list[str] = []
+        self.embedding_status = "not_configured"
+        self.reranker_status = "not_configured"
 
     def get_document(self, document_id: str) -> dict[str, Any]:
         return self.index.get_document(document_id)
@@ -524,10 +646,23 @@ class SchemaSearchBackend:
     def get_neighbors(self, chunk_id: str, window: int = 1) -> list[dict[str, Any]]:
         return self.index.get_neighbors(chunk_id, window=window)
 
-    async def search(self, query: str, filters: Any) -> Any:
+    async def search_with_mode(
+        self,
+        query: str,
+        filters: Any,
+        mode: str,
+        *,
+        apply_reranker: bool = False,
+    ) -> Any:
+        if mode not in {"bm25", "semantic", "hybrid"}:
+            raise ValueError(f"Неизвестный режим поиска: {mode!r}")
         from schemas import Applicability, Coordinates, Evidence, SearchResult
 
-        filter_values = filters.model_dump(mode="json", exclude_none=True) if filters else {}
+        filter_values = (
+            filters.model_dump(mode="json", exclude_none=True)
+            if hasattr(filters, "model_dump")
+            else dict(filters or {})
+        )
         index_filters: dict[str, Any] = {}
         for key in ("contract_number", "counterparty", "document_id"):
             if filter_values.get(key):
@@ -557,53 +692,76 @@ class SchemaSearchBackend:
         event_date = filter_values.get("event_date")
         date_kind = filter_values.get("date_kind")
         if event_date:
-            index_filters["as_of"] = event_date
             if date_kind in {"specification_signed", "specification_signed_at"}:
                 index_filters["specification_signed_at"] = event_date
+            elif date_kind in {"contract_signed", "document_signed"}:
+                index_filters["signed_at"] = event_date
+            elif date_kind in {"law_snapshot", "snapshot", "snapshot_date"}:
+                index_filters["snapshot_date"] = event_date
+            elif date_kind in {"event", "delivery", "delivered", "as_of", "document_validity"}:
+                index_filters["as_of"] = event_date
+            else:
+                raise ValueError(f"Неизвестный тип даты события: {date_kind!r}")
 
-        evidence_items = self.index.search(query, index_filters, top_k=self.top_k)
+        dense_scores = await self._dense_scores(query) if mode in {"semantic", "hybrid"} else None
+        if mode != "bm25" and dense_scores is None:
+            raise ModelAPIError("embeddings: семантический режим недоступен")
+        evidence_items = self.index.search(
+            query,
+            index_filters,
+            top_k=self.top_k,
+            ranking=mode,
+            dense_scores=dense_scores,
+        )
         if (
             self.client is not None
             and self.client.settings.reranker_model
             and evidence_items
+            and apply_reranker
         ):
-            ranked_indices = await self.client.rerank(
-                query,
-                [item["title"] + "\n" + item["text"] for item in evidence_items],
-                top_n=self.client.settings.reranker_top_n,
-            )
-            reranked = [evidence_items[position] for position in ranked_indices]
-            query_contracts = {
-                _normalize_contract(match.group(1))
-                for match in _CONTRACT_RE.finditer(query)
-            }
-            contract_number = index_filters.get("contract_number") or (
-                next(iter(query_contracts)) if len(query_contracts) == 1 else None
-            )
-            related = [
-                item for item in evidence_items
-                if contract_number and item.get("contract_number") == contract_number
-            ]
-            evidence_items = list({
-                item["chunk_id"]: item for item in [*reranked, *related]
-            }.values())
+            try:
+                ranked_indices = await self.client.rerank(
+                    query,
+                    [item["title"] + "\n" + item["text"] for item in evidence_items],
+                    top_n=self.client.settings.reranker_top_n,
+                )
+                reranked = [evidence_items[position] for position in ranked_indices]
+                query_contracts = {
+                    _normalize_contract(match.group(1))
+                    for match in _CONTRACT_RE.finditer(query)
+                }
+                contract_number = index_filters.get("contract_number") or (
+                    next(iter(query_contracts)) if len(query_contracts) == 1 else None
+                )
+                related = [
+                    item for item in evidence_items
+                    if contract_number and item.get("contract_number") == contract_number
+                ]
+                evidence_items = list({
+                    item["chunk_id"]: item for item in [*reranked, *related]
+                }.values())
+                self.reranker_status = "ready"
+            except ModelAPIError as exc:
+                self.reranker_status = "disabled_after_error"
+                diagnostic = f"reranker недоступен; использован {mode}: {exc}"
+                self.diagnostics.append(diagnostic)
+                logger.warning("retrieval: %s", diagnostic)
+        elif self.client is not None and self.client.settings.reranker_model and apply_reranker:
+            self.reranker_status = "ready_not_needed"
 
         converted = []
         for item in evidence_items:
             document = self.index.get_document(item["document_id"])
-            snapshot_match = re.search(r"Дата выгрузки:\s*(\d{2}\.\d{2}\.\d{4})", document["text"])
-            snapshot = None
-            if snapshot_match:
-                day, month, year = map(int, snapshot_match.group(1).split("."))
-                snapshot = date(year, month, day)
-            current_only = item.get("document_type") == "law" and bool(
-                snapshot_match or "действующая" in item["source_file"].casefold()
-            )
+            snapshot = date.fromisoformat(item["snapshot_date"]) if item.get("snapshot_date") else None
+            current_only = bool(item.get("current_only"))
             condition_records = item.get("applicability_conditions", [])
             conditions = [
                 str(condition.get("source_text") or condition)
                 for condition in condition_records
             ]
+            for date_key in ("valid_from_source", "valid_to_source"):
+                if item.get(date_key) and item[date_key] not in conditions:
+                    conditions.append(item[date_key])
             applicability_result = item.get("applicability") or {}
             source_date_kinds = {
                 condition.get("kind")
@@ -617,10 +775,23 @@ class SchemaSearchBackend:
                     "source_contract_number",
                     "amendment_number",
                     "counterparties",
+                    "signed_date",
+                    "signed_date_source",
+                    "approval_date",
+                    "approval_date_source",
+                    "effective_date",
+                    "effective_date_source",
+                    "valid_from_source",
+                    "valid_to_source",
+                    "snapshot_date",
+                    "snapshot_date_source",
+                    "current_only",
                     "related_document_ids",
                     "linked_document_ids",
                     "applicability_conditions",
                     "uncertainties",
+                    "date_uncertainties",
+                    "date_sources",
                     "score",
                     "retrieval_reason",
                 )
@@ -658,6 +829,150 @@ class SchemaSearchBackend:
             ))
         return SearchResult(evidence=converted, candidates=candidates)
 
+    async def _ensure_document_vectors(self) -> dict[str, list[float]] | None:
+        if self.client is None or not self.client.settings.embedding_model:
+            self.embedding_status = "not_configured"
+            return None
+        if self._document_vectors is not None:
+            self.embedding_status = "ready"
+            return self._document_vectors
+        async with self._embedding_lock:
+            if self._document_vectors is not None:
+                self.embedding_status = "ready"
+                return self._document_vectors
+            texts = [
+                f"{chunk['title']}\n{chunk.get('section_reference') or ''}\n{chunk['text']}"
+                for chunk in self.index.chunks
+            ]
+            vectors: dict[str, list[float]] = {}
+            dimension: int | None = None
+            for start in range(0, len(texts), 32):
+                batch = texts[start:start + 32]
+                batch_vectors = await self.client.embeddings(batch)
+                if len(batch_vectors) != len(batch):
+                    raise ModelProtocolError("/embeddings: количество векторов не совпало с текстами")
+                for chunk, vector in zip(self.index.chunks[start:start + 32], batch_vectors):
+                    if dimension is None:
+                        dimension = len(vector)
+                    elif len(vector) != dimension:
+                        raise ModelProtocolError("/embeddings: размерность векторов корпуса различается")
+                    vectors[chunk["chunk_id"]] = vector
+            self._document_vectors = vectors
+            self.embedding_status = "ready"
+            return vectors
+
+    async def _dense_scores(self, query: str) -> dict[str, float] | None:
+        vectors = await self._ensure_document_vectors()
+        if vectors is None:
+            return None
+        query_vectors = await self.client.embeddings([query])
+        if len(query_vectors) != 1:
+            raise ModelProtocolError("/embeddings: ожидался один вектор запроса")
+        query_vector = query_vectors[0]
+        if any(len(vector) != len(query_vector) for vector in vectors.values()):
+            raise ModelProtocolError("/embeddings: размерность запроса и корпуса не совпадает")
+        return {
+            chunk_id: math.fsum(left * right for left, right in zip(vector, query_vector))
+            for chunk_id, vector in vectors.items()
+        }
+
+    async def search(self, query: str, filters: Any) -> Any:
+        configured_embeddings = (
+            self.client is not None and bool(self.client.settings.embedding_model)
+        )
+        mode = "hybrid" if configured_embeddings else "bm25"
+        try:
+            return await self.search_with_mode(
+                query,
+                filters,
+                mode,
+                apply_reranker=bool(self.client and self.client.settings.reranker_model),
+            )
+        except ModelAPIError as exc:
+            if not configured_embeddings:
+                raise
+            self.embedding_status = "disabled_after_error"
+            diagnostic = f"bge-m3 недоступен; продолжен BM25: {exc}"
+            self.diagnostics.append(diagnostic)
+            logger.warning("retrieval: %s", diagnostic)
+            return await self.search_with_mode(
+                query,
+                filters,
+                "bm25",
+                apply_reranker=bool(self.client and self.client.settings.reranker_model),
+            )
+
+
+async def benchmark_modes(
+    index: SearchIndex,
+    cases: list[dict[str, Any]],
+    client: Any = None,
+    top_k: int = 10,
+) -> dict[str, Any]:
+    """Compare BM25, dense, and hybrid recall against manually labeled chunk IDs."""
+    if not cases:
+        raise ValueError("Для сравнения режимов нужен хотя бы один размеченный запрос.")
+    if top_k < 1:
+        raise ValueError("top_k должен быть не меньше 1.")
+    backend = SchemaSearchBackend(index, client=client, top_k=top_k)
+    modes = ("bm25", "semantic", "hybrid")
+    mode_results: dict[str, list[dict[str, Any]]] = {mode: [] for mode in modes}
+    unavailable: dict[str, str] = {}
+    for mode in modes:
+        for case in cases:
+            expected = set(case["relevant_chunk_ids"])
+            if not expected:
+                raise ValueError("Каждый benchmark case должен иметь relevant_chunk_ids.")
+            unknown_ids = expected.difference(index._by_chunk_id)
+            if unknown_ids:
+                raise ValueError(
+                    "Разметка содержит неизвестные chunk_id: "
+                    + ", ".join(sorted(unknown_ids))
+                )
+            if mode != "bm25" and mode in unavailable:
+                break
+            try:
+                result = await backend.search_with_mode(
+                    case["query"],
+                    case.get("filters", {}),
+                    mode,
+                )
+            except ModelAPIError as exc:
+                unavailable[mode] = str(exc)
+                if mode == "semantic":
+                    unavailable["hybrid"] = str(exc)
+                break
+            retrieved = [evidence.chunk_id for evidence in result.evidence]
+            mode_results[mode].append({
+                "query": case["query"],
+                "relevant": len(expected),
+                "found": len(expected.intersection(retrieved)),
+                "recall_at_k": round(len(expected.intersection(retrieved)) / len(expected), 4),
+                "retrieved_chunk_ids": retrieved,
+            })
+    summary: dict[str, Any] = {
+        "top_k": top_k,
+        "case_count": len(cases),
+        "modes": {},
+        "diagnostics": backend.diagnostics,
+    }
+    for mode, results in mode_results.items():
+        if mode in unavailable:
+            summary["modes"][mode] = {"status": "unavailable", "reason": unavailable[mode]}
+        elif mode != "bm25" and not results:
+            summary["modes"][mode] = {
+                "status": "unavailable",
+                "reason": "Модель embeddings не настроена.",
+            }
+        else:
+            summary["modes"][mode] = {
+                "status": "ready",
+                "mean_recall_at_k": round(
+                    sum(item["recall_at_k"] for item in results) / len(results), 4
+                ) if results else 0.0,
+                "queries": results,
+            }
+    return summary
 
 def create_search(data_dir: str | Path, client: Any = None) -> SchemaSearchBackend:
     """Factory referenced by SEARCH_FACTORY=retrieval:create_search."""
@@ -681,6 +996,11 @@ def _main() -> int:
     parser.add_argument("--query", help="Выполнить один поисковый запрос")
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--stats", action="store_true", help="Вывести замеры сборки и размер сериализуемого индекса")
+    parser.add_argument(
+        "--compare-csv",
+        type=Path,
+        help="Сравнить режимы по CSV с колонками query,relevant_chunk_ids,filters_json",
+    )
     args = parser.parse_args()
 
     if args.stats:
@@ -704,6 +1024,44 @@ def _main() -> int:
             "search_ms": round(search_ms, 3),
             "evidence": evidence,
         }, ensure_ascii=False, indent=2))
+    if args.compare_csv:
+        with args.compare_csv.open(encoding="utf-8-sig", newline="") as stream:
+            reader = csv.DictReader(stream)
+            required = {"query", "relevant_chunk_ids"}
+            if not reader.fieldnames or not required.issubset(reader.fieldnames):
+                raise ValueError("--compare-csv требует query,relevant_chunk_ids.")
+            cases = []
+            for row in reader:
+                try:
+                    filters = json.loads(row.get("filters_json") or "{}")
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Некорректный filters_json в строке {reader.line_num}.") from exc
+                cases.append({
+                    "query": row["query"],
+                    "relevant_chunk_ids": [
+                        chunk_id.strip()
+                        for chunk_id in row["relevant_chunk_ids"].split(";")
+                        if chunk_id.strip()
+                    ],
+                    "filters": filters,
+                })
+        client = None
+        if any(os.environ.get(name) for name in ("LLM_API_KEY", "OPENAI_API_KEY")):
+            client = LLMClient(Settings.from_env())
+        async def run_comparison() -> dict[str, Any]:
+            try:
+                return await benchmark_modes(
+                    index,
+                    cases,
+                    client=client,
+                    top_k=args.top_k,
+                )
+            finally:
+                if client is not None:
+                    await client.aclose()
+
+        comparison = asyncio.run(run_comparison())
+        print(json.dumps({"comparison": comparison}, ensure_ascii=False, indent=2))
     return 0
 
 

@@ -25,8 +25,11 @@ DATA_DIR=data .venv/bin/python solution.py
 
 ## Подключение поиска №1
 
-Модуль `retrieval.py` строит BM25-индекс по базе один раз. Его синхронная фабрика
-возвращает backend с асинхронным методом `search`, совместимым с `schemas.SearchResult`:
+Модуль `retrieval.py` строит индекс по базе один раз. По умолчанию поиск
+совмещает BM25 с embeddings из `EMB_MODEL`; без embeddings или при их сбое
+работает BM25 fallback. Подключённый `RERANKER_MODEL` применяется как
+необязательный реранкер. Синхронная фабрика возвращает backend с асинхронным
+методом `search`, совместимым с `schemas.SearchResult`:
 
 ```bash
 DATA_DIR=data SEARCH_FACTORY=retrieval:create_search .venv/bin/python solution.py
