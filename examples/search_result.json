@@ -1,0 +1,37 @@
+{
+  "evidence": [
+    {
+      "document_id": "example-contract",
+      "chunk_id": "example-contract:4.2",
+      "document_title": "Вымышленный договор № Т-1/2026",
+      "section": "п. 4.2",
+      "text": "4.2. Оплата производится в течение 30 календарных дней после подписания УПД.",
+      "coordinates": {
+        "source_path": "example-contract.txt",
+        "char_start": 100,
+        "char_end": 176,
+        "page": null,
+        "bbox": null
+      },
+      "applicability": {
+        "edition": "Первоначальная редакция",
+        "valid_from": "2026-01-01",
+        "valid_to": null,
+        "date_kind": "event",
+        "conditions": [],
+        "supersedes": [],
+        "current_only": false,
+        "snapshot_date": null,
+        "resolved": true
+      },
+      "contract_number": "Т-1/2026",
+      "counterparty": "Тестовый поставщик",
+      "metadata": {
+        "example_only": true
+      }
+    }
+  ],
+  "missing_info": [],
+  "clarification": null,
+  "candidates": []
+}

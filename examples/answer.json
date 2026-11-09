@@ -1,0 +1,23 @@
+{
+  "status": "answer",
+  "text": "Оплата производится в течение 30 календарных дней после подписания УПД. [1]",
+  "citations": [
+    {
+      "document_id": "example-contract",
+      "chunk_id": "example-contract:4.2",
+      "document_title": "Вымышленный договор № Т-1/2026",
+      "section": "п. 4.2",
+      "quote": "4.2. Оплата производится в течение 30 календарных дней после подписания УПД.",
+      "coordinates": {
+        "source_path": "example-contract.txt",
+        "char_start": 100,
+        "char_end": 176,
+        "page": null,
+        "bbox": null
+      },
+      "edition": "Первоначальная редакция",
+      "claim_index": 0
+    }
+  ],
+  "missing_info": []
+}

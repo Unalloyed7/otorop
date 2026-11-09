@@ -1,0 +1,762 @@
+{
+  "Evidence": {
+    "$defs": {
+      "Applicability": {
+        "additionalProperties": false,
+        "properties": {
+          "edition": {
+            "minLength": 1,
+            "title": "Edition",
+            "type": "string"
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid From"
+          },
+          "valid_to": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid To"
+          },
+          "date_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date Kind"
+          },
+          "conditions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "supersedes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supersedes",
+            "type": "array"
+          },
+          "current_only": {
+            "default": false,
+            "title": "Current Only",
+            "type": "boolean"
+          },
+          "snapshot_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Date"
+          },
+          "resolved": {
+            "default": false,
+            "title": "Resolved",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "edition"
+        ],
+        "title": "Applicability",
+        "type": "object"
+      },
+      "Coordinates": {
+        "additionalProperties": false,
+        "properties": {
+          "source_path": {
+            "minLength": 1,
+            "title": "Source Path",
+            "type": "string"
+          },
+          "char_start": {
+            "minimum": 0,
+            "title": "Char Start",
+            "type": "integer"
+          },
+          "char_end": {
+            "exclusiveMinimum": 0,
+            "title": "Char End",
+            "type": "integer"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page"
+          },
+          "bbox": {
+            "anyOf": [
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bbox"
+          }
+        },
+        "required": [
+          "source_path",
+          "char_start",
+          "char_end"
+        ],
+        "title": "Coordinates",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "document_id": {
+        "maxLength": 300,
+        "minLength": 1,
+        "title": "Document Id",
+        "type": "string"
+      },
+      "chunk_id": {
+        "maxLength": 300,
+        "minLength": 1,
+        "title": "Chunk Id",
+        "type": "string"
+      },
+      "document_title": {
+        "maxLength": 500,
+        "minLength": 1,
+        "title": "Document Title",
+        "type": "string"
+      },
+      "section": {
+        "maxLength": 250,
+        "minLength": 1,
+        "title": "Section",
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 30000,
+        "minLength": 1,
+        "title": "Text",
+        "type": "string"
+      },
+      "coordinates": {
+        "$ref": "#/$defs/Coordinates"
+      },
+      "applicability": {
+        "$ref": "#/$defs/Applicability"
+      },
+      "contract_number": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Contract Number"
+      },
+      "counterparty": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Counterparty"
+      },
+      "metadata": {
+        "additionalProperties": true,
+        "title": "Metadata",
+        "type": "object"
+      }
+    },
+    "required": [
+      "document_id",
+      "chunk_id",
+      "document_title",
+      "section",
+      "text",
+      "coordinates",
+      "applicability"
+    ],
+    "title": "Evidence",
+    "type": "object"
+  },
+  "SearchFilters": {
+    "additionalProperties": false,
+    "properties": {
+      "contract_number": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Contract Number"
+      },
+      "counterparty": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Counterparty"
+      },
+      "document_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Document Id"
+      },
+      "event_date": {
+        "anyOf": [
+          {
+            "format": "date",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Event Date"
+      },
+      "date_kind": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Какое событие датировано, например specification_signed",
+        "title": "Date Kind"
+      }
+    },
+    "title": "SearchFilters",
+    "type": "object"
+  },
+  "SearchResult": {
+    "$defs": {
+      "Applicability": {
+        "additionalProperties": false,
+        "properties": {
+          "edition": {
+            "minLength": 1,
+            "title": "Edition",
+            "type": "string"
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid From"
+          },
+          "valid_to": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid To"
+          },
+          "date_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date Kind"
+          },
+          "conditions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "supersedes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supersedes",
+            "type": "array"
+          },
+          "current_only": {
+            "default": false,
+            "title": "Current Only",
+            "type": "boolean"
+          },
+          "snapshot_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Date"
+          },
+          "resolved": {
+            "default": false,
+            "title": "Resolved",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "edition"
+        ],
+        "title": "Applicability",
+        "type": "object"
+      },
+      "Coordinates": {
+        "additionalProperties": false,
+        "properties": {
+          "source_path": {
+            "minLength": 1,
+            "title": "Source Path",
+            "type": "string"
+          },
+          "char_start": {
+            "minimum": 0,
+            "title": "Char Start",
+            "type": "integer"
+          },
+          "char_end": {
+            "exclusiveMinimum": 0,
+            "title": "Char End",
+            "type": "integer"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page"
+          },
+          "bbox": {
+            "anyOf": [
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bbox"
+          }
+        },
+        "required": [
+          "source_path",
+          "char_start",
+          "char_end"
+        ],
+        "title": "Coordinates",
+        "type": "object"
+      },
+      "Evidence": {
+        "additionalProperties": false,
+        "properties": {
+          "document_id": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Document Id",
+            "type": "string"
+          },
+          "chunk_id": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "document_title": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Document Title",
+            "type": "string"
+          },
+          "section": {
+            "maxLength": 250,
+            "minLength": 1,
+            "title": "Section",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 30000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "coordinates": {
+            "$ref": "#/$defs/Coordinates"
+          },
+          "applicability": {
+            "$ref": "#/$defs/Applicability"
+          },
+          "contract_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contract Number"
+          },
+          "counterparty": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Counterparty"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          }
+        },
+        "required": [
+          "document_id",
+          "chunk_id",
+          "document_title",
+          "section",
+          "text",
+          "coordinates",
+          "applicability"
+        ],
+        "title": "Evidence",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "evidence": {
+        "items": {
+          "$ref": "#/$defs/Evidence"
+        },
+        "title": "Evidence",
+        "type": "array"
+      },
+      "missing_info": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Missing Info",
+        "type": "array"
+      },
+      "clarification": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Clarification"
+      },
+      "candidates": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Candidates",
+        "type": "array"
+      }
+    },
+    "title": "SearchResult",
+    "type": "object"
+  },
+  "Answer": {
+    "$defs": {
+      "Citation": {
+        "additionalProperties": false,
+        "properties": {
+          "document_id": {
+            "minLength": 1,
+            "title": "Document Id",
+            "type": "string"
+          },
+          "chunk_id": {
+            "minLength": 1,
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "document_title": {
+            "minLength": 1,
+            "title": "Document Title",
+            "type": "string"
+          },
+          "section": {
+            "minLength": 1,
+            "title": "Section",
+            "type": "string"
+          },
+          "quote": {
+            "minLength": 1,
+            "title": "Quote",
+            "type": "string"
+          },
+          "coordinates": {
+            "$ref": "#/$defs/Coordinates"
+          },
+          "edition": {
+            "minLength": 1,
+            "title": "Edition",
+            "type": "string"
+          },
+          "claim_index": {
+            "minimum": 0,
+            "title": "Claim Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "document_id",
+          "chunk_id",
+          "document_title",
+          "section",
+          "quote",
+          "coordinates",
+          "edition",
+          "claim_index"
+        ],
+        "title": "Citation",
+        "type": "object"
+      },
+      "Coordinates": {
+        "additionalProperties": false,
+        "properties": {
+          "source_path": {
+            "minLength": 1,
+            "title": "Source Path",
+            "type": "string"
+          },
+          "char_start": {
+            "minimum": 0,
+            "title": "Char Start",
+            "type": "integer"
+          },
+          "char_end": {
+            "exclusiveMinimum": 0,
+            "title": "Char End",
+            "type": "integer"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page"
+          },
+          "bbox": {
+            "anyOf": [
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bbox"
+          }
+        },
+        "required": [
+          "source_path",
+          "char_start",
+          "char_end"
+        ],
+        "title": "Coordinates",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "status": {
+        "enum": [
+          "answer",
+          "partial",
+          "clarify",
+          "insufficient",
+          "out_of_scope",
+          "refuse",
+          "error"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 8000,
+        "minLength": 1,
+        "title": "Text",
+        "type": "string"
+      },
+      "citations": {
+        "items": {
+          "$ref": "#/$defs/Citation"
+        },
+        "title": "Citations",
+        "type": "array"
+      },
+      "missing_info": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Missing Info",
+        "type": "array"
+      }
+    },
+    "required": [
+      "status",
+      "text"
+    ],
+    "title": "Answer",
+    "type": "object"
+  }
+}
