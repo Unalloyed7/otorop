@@ -23,6 +23,25 @@ DATA_DIR=data .venv/bin/python solution.py
 
 Без `SEARCH_FACTORY` используется временный лексический поиск по настоящему ZIP. Он не читает demo_output и не подставляет ответы по ID. Индекс №1 подключается через `SEARCH_FACTORY=retrieval:create_search`.
 
+## Подключение поиска №1
+
+Модуль `retrieval.py` строит BM25-индекс по базе один раз и предоставляет
+совместимую с `schemas.SearchResult` асинхронную фабрику:
+
+```bash
+DATA_DIR=data SEARCH_FACTORY=retrieval:create_search .venv/bin/python solution.py
+```
+
+Для локальной проверки без API:
+
+```bash
+.venv/bin/python retrieval.py data/knowledge-base.zip \
+  --query "срок оплаты по договору П-17/2024" --top-k 10 --stats
+```
+
+Подробности JSON-контракта, фильтров дат, координат исходных цитат и получения
+документа/соседних фрагментов — в [инструкции поиска](RETRIEVAL_CONTRACT.md).
+
 ## Веб и Python
 
 ```python
