@@ -1,4 +1,4 @@
-"""Подключение поиска №1 и временный лексический поиск по настоящей базе.
+"""Подключение поиска №1 и явно выбираемый резервный поиск по настоящей базе.
 
 Временный адаптер не разрешает автоматически условия допсоглашений. Он передаёт
 договор и связанные документы целиком, чтобы движок сохранил условия и исключения.
@@ -201,15 +201,18 @@ class LexicalSearch:
 
 
 async def build_search(client: LLMClient):
-    factory_path = env_value("SEARCH_FACTORY")
+    factory_path = env_value("SEARCH_FACTORY", default="retrieval:create_search")
     data_dir = Path(env_value("DATA_DIR", default="data"))
-    if factory_path:
-        module, attribute = factory_path.split(":", 1)
-        factory = getattr(importlib.import_module(module), attribute)
-        backend = factory(data_dir=data_dir, client=client)
-        return await backend if inspect.isawaitable(backend) else backend
+    module, attribute = factory_path.split(":", 1)
+    factory = getattr(importlib.import_module(module), attribute)
+    backend = factory(data_dir=data_dir, client=client)
+    return await backend if inspect.isawaitable(backend) else backend
+
+
+def create_lexical_search(*, data_dir: Path, client: LLMClient):
+    """Резерв включается явно: SEARCH_FACTORY=search_adapter:create_lexical_search."""
     for filename in ("knowledge-base.zip", "kb.zip", "knowledge_base.zip"):
         path = data_dir / filename
         if path.is_file():
             return LexicalSearch.from_zip(path, client, client.settings.top_k)
-    raise SearchError("Нет базы знаний в DATA_DIR и не задан SEARCH_FACTORY")
+    raise SearchError("Нет базы знаний в DATA_DIR")

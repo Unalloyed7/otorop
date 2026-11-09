@@ -54,6 +54,9 @@ DRAFT_PROMPT = BOUNDARY + """
 Суммы, сроки, обязанности и выводы без подтверждения не включай. Не делай вычисления,
 которые нельзя проверить по точной цитате. Исправь ложные предпосылки.
 Различай дату вступления допсоглашения в силу и дату события, к которому оно применяется.
+metadata.applicability_status=not_applicable запрещает применять изменение к событию;
+само условие можно процитировать для объяснения, почему изменение не применяется.
+unknown означает, что существенные обстоятельства ещё не установлены.
 Отсутствующую историческую редакцию закона не восстанавливай из памяти.
 Если условия применения неизвестны, приведи только подтверждённое условное правило
 и запроси обстоятельства. Названия источников будут добавлены программой.
@@ -65,6 +68,8 @@ missing_info — только краткие названия недостающ
 
 VERIFY_PROMPT = BOUNDARY + """
 Независимо проверь claims по ВСЕМ evidence, filters, истории и parts.
+Учитывай metadata.applicability_status: not_applicable не разрешает безусловно
+применять изменение, unknown не доказывает выполнение условий.
 Верни индексы supported ТОЛЬКО для полностью подтверждённых claims. Существующая цитата
 недостаточна: проверь логический вывод, суммы, сроки, исключения, редакцию, сферу
 действия, характер даты и допсоглашения. Если утрачен предел ответственности или
@@ -132,7 +137,7 @@ def _citation_section(e: Evidence, offset: int) -> str:
     for span in reversed(spans):
         if span["start"] <= offset < span["end"]:
             return span["label"]
-    return e.section
+    return "п. " + e.section if re.fullmatch(r"\d+(?:\.\d+)*", e.section) else e.section
 
 
 def validate_supports(draft: Draft, evidence: list[Evidence], filters: SearchFilters, parts: list[str]) -> list[Citation]:
@@ -220,6 +225,11 @@ class LegalAssistant:
         found = SearchResult.model_validate(await self.search.search(intent.query, filters))
         if found.clarification:
             return Answer(status="clarify", text=found.clarification, missing_info=found.candidates or [found.clarification])
+        candidates = list(dict.fromkeys(found.candidates))
+        evidence_parties = {e.counterparty for e in found.evidence if e.counterparty}
+        narrowed_by_id = bool(filters.contract_number or filters.document_id) and len(evidence_parties) == 1
+        if len(candidates) > 1 and not narrowed_by_id:
+            return Answer(status="clarify", text="Уточните контрагента: " + " или ".join(candidates) + "?", missing_info=candidates)
         evidence, temporal_missing = [], []
         for e in found.evidence:
             a = e.applicability

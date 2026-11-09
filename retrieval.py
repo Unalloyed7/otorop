@@ -590,6 +590,15 @@ class SchemaSearchBackend:
 
         converted = []
         for item in evidence_items:
+            document = self.index.get_document(item["document_id"])
+            snapshot_match = re.search(r"Дата выгрузки:\s*(\d{2}\.\d{2}\.\d{4})", document["text"])
+            snapshot = None
+            if snapshot_match:
+                day, month, year = map(int, snapshot_match.group(1).split("."))
+                snapshot = date(year, month, day)
+            current_only = item.get("document_type") == "law" and bool(
+                snapshot_match or "действующая" in item["source_file"].casefold()
+            )
             condition_records = item.get("applicability_conditions", [])
             conditions = [
                 str(condition.get("source_text") or condition)
@@ -617,6 +626,8 @@ class SchemaSearchBackend:
                 )
                 if key in item
             }
+            # resolved различает известность результата, но не его знак.
+            metadata["applicability_status"] = applicability_result.get("status", "not_specified")
             converted.append(Evidence(
                 document_id=item["document_id"],
                 chunk_id=item["chunk_id"],
@@ -629,11 +640,16 @@ class SchemaSearchBackend:
                     char_end=item["end_char"],
                 ),
                 applicability=Applicability(
-                    edition=item.get("edition") or "Редакция в источнике не указана",
+                    edition=item.get("edition") or (
+                        f"Действующая редакция; выгрузка {snapshot.strftime('%d.%m.%Y')}"
+                        if current_only and snapshot else "Редакция в источнике не указана"
+                    ),
                     valid_from=item.get("valid_from"),
                     valid_to=item.get("valid_to"),
                     date_kind=next(iter(source_date_kinds)) if len(source_date_kinds) == 1 else None,
                     conditions=conditions,
+                    current_only=current_only,
+                    snapshot_date=snapshot,
                     resolved=applicability_result.get("status") in {"applicable", "not_applicable"},
                 ),
                 contract_number=item.get("contract_number"),
