@@ -9,3 +9,5 @@ data/
 *.egg-info/
 dist/
 playwright-report/
+run-report*.jsonl
+reports/

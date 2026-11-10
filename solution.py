@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import csv
 import logging
+import importlib
+import time
 import os
 import sys
 import tempfile
@@ -11,6 +13,7 @@ from collections import Counter
 from pathlib import Path
 
 from assistant import LegalAssistant
+from diagnostics import append_report, capture_run
 from llm_client import LLMClient, Settings, env_value
 from schemas import Answer
 from search_adapter import build_search
@@ -87,26 +90,56 @@ def validate_submission(path: Path, expected_ids: list[str]):
         raise SubmissionError("Неверный ответ в сабмите")
 
 
-async def _process(rows, engine, workers, budget=1120):
+def _runtime_options():
+    try:
+        return importlib.import_module("submission_options")
+    except ModuleNotFoundError as exc:
+        if exc.name != "submission_options":
+            raise
+        return None
+
+
+async def _process(rows, engine, workers, budget=1120, *, report_path=None):
     if not 1 <= workers <= 8 or not 0 < budget <= 1170:
         raise SubmissionError("Некорректный параллелизм или бюджет времени")
     results = [None] * len(rows)
+    written = set()
+    client = getattr(engine, "client", None)
+    settings = getattr(client, "settings", None)
+    secrets = (settings.api_key.get_secret_value(),) if settings else ()
     queue = asyncio.Queue()
     for i, (_, question) in enumerate(rows):
         queue.put_nowait((i, question))
 
+    def record(i, result, text, run, elapsed):
+        if report_path:
+            append_report(report_path, {"id": rows[i][0], "question": rows[i][1], "verify": getattr(engine, "verify", None), "answer": result.model_dump(mode="json"), "csv_answer": text, "duration_ms": round(elapsed * 1000, 2), "calls": dict(Counter(c["endpoint"] for c in run["api_calls"])), **run}, secrets=secrets)
+            written.add(i)
+            invalid = sum(not output["valid"] for output in run["model_outputs"])
+            print(f"diagnostics: case={i+1}, status={result.status}, api_calls={len(run['api_calls'])}, invalid_json={invalid}", flush=True)
+
     async def worker():
         while not queue.empty():
             i, question = queue.get_nowait()
-            # Только question; ID не передаётся ни движку, ни модели.
-            try:
-                result = await engine.answer(question)
-                text = render_answer(result)
-            except Exception:
-                result = Answer(status="error", text="Техническая ошибка обработки ответа. Повторите запрос позднее.")
-                text = result.text
-            results[i] = (result.status, text)
-            queue.task_done()
+            started = time.perf_counter()
+            with capture_run() as run:
+                try:
+                    # ID не передаётся ни движку, ни модели.
+                    result = await engine.answer(question, trace=run) if report_path else await engine.answer(question)
+                    text = render_answer(result)
+                except asyncio.CancelledError:
+                    result = Answer(status="error", text="Техническая ошибка: исчерпан лимит времени обработки. Основания в базе не проверены.")
+                    run["stages"].append({"stage": "error", "kind": "RunTimeout"})
+                    results[i] = (result.status, result.text)
+                    record(i, result, result.text, run, time.perf_counter() - started)
+                    raise
+                except Exception as exc:
+                    result = Answer(status="error", text="Техническая ошибка обработки ответа. Повторите запрос позднее.")
+                    text = result.text
+                    run["stages"].append({"stage": "error", "kind": type(exc).__name__})
+                results[i] = (result.status, text)
+                record(i, result, text, run, time.perf_counter() - started)
+                queue.task_done()
     try:
         async with asyncio.timeout(budget):
             await asyncio.gather(*(worker() for _ in range(min(workers, len(rows)))))
@@ -115,24 +148,42 @@ async def _process(rows, engine, workers, budget=1120):
     for i, result in enumerate(results):
         if result is None:
             results[i] = ("error", "Техническая ошибка: исчерпан лимит времени обработки. Основания в базе не проверены.")
+        if report_path and i not in written:
+            error = Answer(status=results[i][0], text=results[i][1])
+            record(i, error, error.text, {"api_calls": [], "model_outputs": [], "stages": [{"stage": "error", "kind": "NotProcessedBeforeDeadline"}]}, 0)
     return results
 
 
-async def run_submission(data_dir: Path, output: Path = Path("submission.csv"), *, engine=None, workers: int = 2) -> dict[str, int]:
+async def run_submission(data_dir: Path, output: Path = Path("submission.csv"), *, engine=None, workers: int = 2, report_path: Path | None = None) -> dict[str, int]:
     rows = load_questions(data_dir / "questions.csv")
     budget = float(env_value("RUN_TIMEOUT", default="1120"))
+    options = _runtime_options()
+    report = report_path or env_value("RUN_REPORT") or getattr(options, "RUN_REPORT", None)
+    report = Path(report) if report else None
+    if report:
+        if report.suffix != ".jsonl" or report.resolve() == output.resolve():
+            raise SubmissionError("Отчёт должен быть отдельным файлом .jsonl")
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text("", encoding="utf-8")
     if engine is not None:
-        results = await _process(rows, engine, workers, budget)
+        results = await _process(rows, engine, workers, budget, report_path=report)
     else:
         client = None
         try:
             settings = Settings.from_env()
+            override = getattr(options, "VERIFY_ANSWER", None)
+            if type(override) is bool:
+                settings = settings.model_copy(update={"verify": override})
             client = LLMClient(settings)
             search = await build_search(client)
-            results = await _process(rows, LegalAssistant(search, client), settings.max_workers, budget)
-        except Exception:
+            results = await _process(rows, LegalAssistant(search, client), settings.max_workers, budget, report_path=report)
+        except Exception as exc:
             logging.getLogger(__name__).error("submission: ошибка конфигурации API или индекса")
             results = [("error", "Техническая ошибка настройки API или поискового индекса. Основания в базе не проверены.") for _ in rows]
+            if report:
+                report.write_text("", encoding="utf-8")
+                for (qid, question), (_, text) in zip(rows, results):
+                    append_report(report, {"id": qid, "question": question, "answer": Answer(status="error", text=text).model_dump(), "calls": {}, "stages": [{"stage": "error", "kind": type(exc).__name__, "message": "configuration/index"}]}, secrets=(settings.api_key.get_secret_value(),) if client else ())
         finally:
             if client:
                 await client.aclose()

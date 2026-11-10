@@ -6,19 +6,21 @@ import subprocess
 import sys
 import threading
 import zipfile
-import shutil
+import pytest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from solution import validate_submission
+from tools.package_submission import package
 
 
-def test_cli_with_real_http_csv_and_archive(tmp_path):
-    root = Path(__file__).resolve().parents[1]
+@pytest.mark.parametrize("mode", [None, True, False])
+def test_cli_with_real_http_csv_and_archive(tmp_path, mode):
     transferred = tmp_path / "submission_root"
     transferred.mkdir()
-    for module in root.glob("*.py"):
-        shutil.copy2(module, transferred / module.name)
+    output = package(tmp_path / "submission.zip", with_report=mode is not None, verify_answer=mode)
+    with zipfile.ZipFile(output) as archive:
+        archive.extractall(transferred)
     data = tmp_path / "input"
     data.mkdir()
     (data / "questions.csv").write_text('id,question\n001,"Срок оплаты по договору Т-1/2026?"\n', encoding="utf-8")
@@ -63,6 +65,14 @@ def test_cli_with_real_http_csv_and_archive(tmp_path):
     with (tmp_path / "submission.csv").open(encoding="utf-8", newline="") as f:
         row = next(csv.DictReader(f))
     assert "30 календарных" in row["answer"] and "п. 4.2" in row["answer"]
-    assert len(requests) == 3
+    expected = 2 if mode is False else 3
+    assert len(requests) == expected
     assert all(path == "/v1/chat/completions" for path, _ in requests)
     assert "test-only-key" not in result.stdout + result.stderr
+    if mode is not None:
+        report = (tmp_path / "run-report.jsonl").read_text(encoding="utf-8")
+        record = json.loads(report)
+        assert record["id"] == "001" and record["verify"] is mode
+        assert record["calls"] == {"/chat/completions": expected}
+        assert record["answer"]["status"] == "answer" and record["answer"]["citations"]
+        assert "test-only-key" not in report and "127.0.0.1:" not in report

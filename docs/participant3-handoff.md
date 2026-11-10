@@ -92,7 +92,7 @@ python3 -m venv .venv
 .venv/bin/python tools/package_submission.py
 ```
 
-Выход — `dist/psb-submission.zip`. Внутри только `solution.py`, schemas.py, llm_client.py, assistant.py, search_adapter.py, documents.py, retrieval.py и requirements.txt. Веб и его зависимости, `.env`, данные, тесты и демонстрационные ответы не попадают в ZIP. Платформа устанавливает зависимости сама; скрипт ничего не устанавливает.
+Выход — `dist/psb-submission.zip`. Внутри только `solution.py`, schemas.py, llm_client.py, assistant.py, search_adapter.py, documents.py, retrieval.py, temporal.py, diagnostics.py и requirements.txt. Веб и его зависимости, `.env`, данные, тесты и демонстрационные ответы не попадают в ZIP. Платформа устанавливает зависимости сама; скрипт ничего не устанавливает. Флаги `--with-report --verify-answer 1` добавляют конфигурацию диагностического прогона без ключей: см. [протокол №2](answer-reliability.md).
 
 Если добавлен корневой runtime-модуль, передайте `--extra-module имя.py` или обновите список MODULES. Модуль во вложенной папке не будет перенесён платформой. Переменные окружения для сабмита описаны в README; публичные модели и их ID не угадываем.
 

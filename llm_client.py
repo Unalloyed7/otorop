@@ -6,10 +6,12 @@ import json
 import math
 import os
 import random
+import time
 from collections import Counter
 from typing import TypeVar
 
 import httpx
+from diagnostics import active_run
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
 
 T = TypeVar("T", bound=BaseModel)
@@ -47,6 +49,7 @@ class Settings(BaseModel):
     reranker_top_n: int = Field(default=8, ge=1, le=40)
     verify: bool = True
     question_timeout: float = Field(default=240, gt=0, le=900, allow_inf_nan=False)
+    search_retries: int = Field(default=1, ge=0, le=1)
 
     @field_validator("base_url")
     @classmethod
@@ -81,6 +84,7 @@ class Settings(BaseModel):
                 reranker_top_n=int(env_value("RERANKER_TOP_N", default="8")),
                 verify=env_value("VERIFY_ANSWER", default="1").lower() in {"1", "true", "yes"},
                 question_timeout=float(env_value("QUESTION_TIMEOUT", default="240")),
+                search_retries=int(env_value("SEARCH_RETRIES", default="1")),
             )
         except (ValueError, ValidationError):
             raise ModelAPIError("config: проверьте переменные API и числовые настройки") from None
@@ -113,11 +117,23 @@ class LLMClient:
             try:
                 async with self._limit:
                     self.calls[endpoint] += 1
-                    response = await self._http.post(
-                        self.settings.base_url + endpoint,
-                        headers={"Authorization": "Bearer " + self.settings.api_key.get_secret_value()},
-                        json=payload,
-                    )
+                    run = active_run()
+                    event = {"endpoint": endpoint, "attempt": attempt + 1}
+                    if run is not None:
+                        run["api_calls"].append(event)
+                    started = time.perf_counter()
+                    try:
+                        response = await self._http.post(
+                            self.settings.base_url + endpoint,
+                            headers={"Authorization": "Bearer " + self.settings.api_key.get_secret_value()},
+                            json=payload,
+                        )
+                        event["http_status"] = response.status_code
+                    except httpx.TransportError as exc:
+                        event["error_type"] = type(exc).__name__
+                        raise
+                    finally:
+                        event["duration_ms"] = round((time.perf_counter() - started) * 1000, 2)
                 if response.status_code in {408, 429, 500, 502, 503, 504}:
                     if attempt == self.settings.retries:
                         raise ModelAPIError(f"{endpoint}: HTTP {response.status_code}, попытки исчерпаны")
@@ -149,6 +165,10 @@ class LLMClient:
         try:
             choice = data["choices"][0]
             content = choice["message"]["content"]
+            run = active_run()
+            if run is not None:
+                reason = choice.get("finish_reason")
+                run["chat_responses"].append({"finish_reason": reason if reason is None or isinstance(reason, str) else "invalid_type", "output": content if isinstance(content, str) else None, "content_type": type(content).__name__})
             if choice.get("finish_reason") not in {None, "stop"}:
                 raise ValueError("Незавершённый ответ")
             if not isinstance(content, str) or not content.strip():
@@ -163,10 +183,16 @@ class LLMClient:
             {"role": "system", "content": instruction + "\nВерни только JSON по схеме:\n" + json.dumps(schema.model_json_schema(), ensure_ascii=False)},
             {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
         ])
+        run = active_run()
+        event = {"schema": schema.__name__, "output": content, "valid": False}
+        if run is not None:
+            run["model_outputs"].append(event)
         if content.startswith("```json\n") and content.endswith("\n```"):
             content = content[8:-4]
         try:
-            return schema.model_validate_json(content)
+            result = schema.model_validate_json(content)
+            event["valid"] = True
+            return result
         except (ValueError, ValidationError):
             raise ModelProtocolError("/chat/completions: ответ не соответствует контракту JSON") from None
 

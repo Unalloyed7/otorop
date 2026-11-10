@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from xml.etree import ElementTree as ET
 
-PROCESSOR_VERSION = "documents-v2"
+PROCESSOR_VERSION = "documents-v3"
 SUPPORTED_SUFFIXES = {".txt", ".md", ".docx"}
 
 _CONTRACT_RE = re.compile(
@@ -195,7 +195,7 @@ def _extract_metadata(source_file: str, text: str) -> dict[str, Any]:
         r"(?:утрат(?:ил|ила|ило|или)\s+силу\s+с|действует\s+до|действовал[ао]?\s+до)",
         text,
     )
-    if valid_to and re.search(r"(?:действует|действовал[ао]?)\s+до", text, re.IGNORECASE):
+    if valid_to and valid_to_source and re.match(r"(?:действует|действовал[ао]?)\s+до", valid_to_source, re.IGNORECASE):
         end_date = date.fromisoformat(valid_to) + timedelta(days=1)
         valid_to = end_date.isoformat()
         valid_to_source = f"{valid_to_source} (исключительная граница: {valid_to})"
@@ -207,6 +207,24 @@ def _extract_metadata(source_file: str, text: str) -> dict[str, Any]:
         snapshot_date is not None
         or bool(re.search(r"(?:^|[_\s])действующ(?:ая|его|ей|ую)(?:[_\s.]|$)", normalized_name))
     )
+    provision_date_sources = []
+    if document_type == "law":
+        # Утрата силы отдельного пункта не означает утрату силы всей статьи.
+        provision_date_sources = [
+            {"kind": kind, "date": value, "source_text": source}
+            for kind, value, source in (
+                ("effective_date", effective_date, effective_date_source),
+                ("valid_from", valid_from, valid_from_source),
+                ("valid_to", valid_to, valid_to_source),
+            ) if source
+        ]
+        effective_date = effective_date_source = None
+        valid_from = valid_from_source = valid_to = valid_to_source = None
+        # Границу всего документа принимаем лишь из явного заголовка редакции.
+        for line in text[:2000].split("\n"):
+            if re.match(r"^\s*(?:настоящая\s+)?редакция\b", line, re.I):
+                valid_from, valid_from_source = _first_date_with_source(r"действует\s+с", line)
+                valid_to, valid_to_source = _first_date_with_source(r"утратила\s+силу\s+с", line)
     applicability_conditions: list[dict[str, str]] = []
     if document_type == "amendment":
         for line in text.splitlines():
@@ -287,6 +305,7 @@ def _extract_metadata(source_file: str, text: str) -> dict[str, Any]:
         "snapshot_date": snapshot_date,
         "snapshot_date_source": snapshot_date_source,
         "date_sources": date_sources,
+        "provision_date_sources": provision_date_sources,
         "current_only": current_only,
         "date_uncertainties": list(uncertainties),
         "applicability_conditions": applicability_conditions,

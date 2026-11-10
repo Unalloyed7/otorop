@@ -148,6 +148,7 @@ class Intent(Model):
     parts: list[str] = Field(min_length=1, max_length=10)
     filters: SearchFilters = Field(default_factory=SearchFilters)
     clarification: str | None = None
+    temporal_mode: Literal["auto", "current", "historical", "future", "snapshot"] = "auto"
 
 
 class Verdict(Model):

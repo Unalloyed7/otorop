@@ -918,6 +918,7 @@ class SchemaSearchBackend:
                     "uncertainties",
                     "date_uncertainties",
                     "date_sources",
+                    "provision_date_sources",
                     "score",
                     "retrieval_reason",
                 )
