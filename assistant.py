@@ -129,8 +129,68 @@ def parse_messages(messages: str | Sequence[Message | dict]) -> list[Message]:
     return result
 
 
+_SMALL_NUMERALS = {
+    0: "ноль нуль нуля нулю нулем нулём нуле",
+    1: "один одна одно одного одной одному одним одном одну",
+    2: "два две двух двум двумя",
+    3: "три трех трёх трем трём тремя",
+    4: "четыре четырех четырёх четырем четырём четырьмя",
+    5: "пять пяти пятью", 6: "шесть шести шестью", 7: "семь семи семью",
+    8: "восемь восьми восемью восьмью", 9: "девять девяти девятью",
+    10: "десять десяти десятью",
+}
+_NUMERAL_VALUES = {word: str(value) for value, words in _SMALL_NUMERALS.items() for word in words.split()}
+_LARGER_NUMERAL = re.compile(
+    r"(?:одиннадцат|двенадцат|тринадцат|четырнадцат|пятнадцат|шестнадцат|семнадцат|"
+    r"восемнадцат|девятнадцат|двадцат|тридцат|сорок|пятидесят|шестидесят|семидесят|"
+    r"восьмидесят|девяност|двест|двухсот|трист|тр[её]хсот|четырест|четыр[её]хсот|"
+    r"пятьсот|пятисот|шестьсот|шестисот|семьсот|семисот|восемьсот|восьмисот|"
+    r"девятьсот|девятисот|тысяч|миллион|миллиард)\w*|сто|ста", re.I)
+_NUMBER_WITH_UNIT = re.compile(
+    r"\b(" + "|".join(_NUMERAL_VALUES) + r")\s+(?:(?:рабочих|календарных)\s+)?"
+    r"(?:день|дня|дней|суток|час|часа|часов|неделя|недели|недель|месяц|месяца|месяцев|"
+    r"год|года|лет|процент|процента|процентов|рубль|рубля|рублей)\b", re.I)
+
+
 def _numbers(text: str) -> set[str]:
-    return set(re.findall(r"\d+(?:[.,]\d+)?", re.sub(r"(?<=\d)[ \u00a0\u202f]+(?=\d)", "", text)))
+    # Склеиваем только группы тысяч, а не соседние числа «10 30».
+    text = re.sub(r"(?<![\d.,])\d{1,3}(?:[ \u00a0\u202f]+\d{3})+(?!\d)",
+                  lambda m: re.sub(r"\s+", "", m.group()), text)
+    numbers = {n.replace(",", ".") for n in re.findall(r"\d+(?:[.,]\d+)?", text)}
+    for match in _NUMBER_WITH_UNIT.finditer(text):
+        previous = re.search(r"([а-яё]+)\s+$", text[:match.start()], re.I)
+        # Не превращаем «двадцать четыре месяца» в четыре месяца.
+        if previous and (previous[1].casefold() in _NUMERAL_VALUES or _LARGER_NUMERAL.fullmatch(previous[1])):
+            continue
+        numbers.add(_NUMERAL_VALUES[match[1].casefold()])
+    return numbers
+
+
+def _without_source_labels(text: str, sources: list[Evidence]) -> str:
+    """Номер источника — метаданные, но не основание для суммы или срока."""
+    for e in sources:
+        if e.contract_number:
+            text = re.sub(r"\bдоговор(?:а|у|ом|е)?\s*(?:№\s*)?" +
+                          re.escape(e.contract_number) + r"(?![\w/\-])", "", text, flags=re.I)
+        for locator in re.findall(r"\d+(?:\.\d+)*", e.section):
+            # Разрешаем только явно обозначенную ссылку на известный пункт/статью.
+            prefix = r"(?<!\w)(?:пункт(?:а|у|ом|е)?|пп?\.|стать(?:я|и|ю|е|ёй)|ст\.)\s*"
+            text = re.sub(prefix + re.escape(locator) + r"(?!\w|\.\d|,\d)", "", text, flags=re.I)
+    return text
+
+
+def _quote_span(text: str, quote: str) -> tuple[int, int]:
+    """Допускаем только разницу в пробелах; возвращаем точный диапазон оригинала."""
+    if not quote.strip():
+        raise CitationError("Нет точной цитаты")
+    offset = text.find(quote)
+    if offset >= 0:
+        return offset, offset + len(quote)
+    pattern = r"\s+".join(re.escape(token) for token in quote.split())
+    match = re.search(pattern, text)
+    if match is None:
+        raise CitationError("Нет точной цитаты")
+    return match.span()
 
 
 def _instruction_overlap(text: str, start: int, end: int) -> bool:
@@ -158,34 +218,37 @@ def validate_supports(draft: Draft, evidence: list[Evidence], filters: SearchFil
     citations = []
     for index, claim in enumerate(draft.claims):
         quotes = []
+        sources = []
+        canonical_supports = []
         if any(type(p) is not int or p < 0 or p >= len(parts) for p in claim.addresses):
             raise CitationError("Несуществующая часть вопроса")
         for support in claim.supports:
             e = by_id.get(support.chunk_id)
             if e is None or e.document_id != support.document_id:
                 raise CitationError("Подмена документа или фрагмента")
-            if support.quote not in e.text or not support.quote.strip():
-                raise CitationError("Нет точной цитаты")
-            offset = e.text.index(support.quote)
-            if _instruction_overlap(e.text, offset, offset + len(support.quote)):
+            offset, end = _quote_span(e.text, support.quote)
+            quote = e.text[offset:end]
+            if _instruction_overlap(e.text, offset, end):
                 raise CitationError("Инструкция для ИИ не является юридическим основанием")
             a = e.applicability
             issue = temporal_issue(e, filters, mode=temporal_mode, reference=reference or datetime.now(timezone(timedelta(hours=3))).date())
             if issue:
                 raise CitationError(issue)
-            quotes.append(support.quote)
+            quotes.append(quote)
+            sources.append(e)
+            canonical_supports.append(support.model_copy(update={"quote": quote}))
             coordinates = e.coordinates.model_copy(update={
                 "char_start": e.coordinates.char_start + offset,
-                "char_end": e.coordinates.char_start + offset + len(support.quote),
+                "char_end": e.coordinates.char_start + end,
             })
             citations.append(Citation(
                 document_id=e.document_id, chunk_id=e.chunk_id, document_title=e.document_title,
-                section=_citation_section(e, offset), quote=support.quote, coordinates=coordinates,
+                section=_citation_section(e, offset), quote=quote, coordinates=coordinates,
                 edition=a.edition, claim_index=index,
             ))
-        if not _numbers(claim.text) <= _numbers(" ".join(quotes)):
+        if not _numbers(_without_source_labels(claim.text, sources)) <= set().union(*(_numbers(q) for q in quotes)):
             raise CitationError("Число в выводе не подтверждено цитатой")
-        if not period_quoted(claim.supports, evidence, filters, mode=temporal_mode, reference=reference or datetime.now(timezone(timedelta(hours=3))).date()):
+        if not period_quoted(canonical_supports, evidence, filters, mode=temporal_mode, reference=reference or datetime.now(timezone(timedelta(hours=3))).date()):
             raise CitationError("Не процитировано условие действия нормы во времени")
     return citations
 
@@ -242,8 +305,11 @@ class LegalAssistant:
         valid, dropped = [], set()
         for index, claim in enumerate(candidate):
             try:
-                validate_supports(Draft(status="answer", claims=[claim]), evidence, filters, intent.parts, temporal_mode=intent.temporal_mode, reference=reference)
-                valid.append(claim)
+                citations = validate_supports(Draft(status="answer", claims=[claim]), evidence, filters, intent.parts, temporal_mode=intent.temporal_mode, reference=reference)
+                # Семантическая проверка и итоговый ответ используют исходный текст,
+                # а не восстановленное моделью оформление цитаты.
+                supports = [s.model_copy(update={"quote": c.quote}) for s, c in zip(claim.supports, citations)]
+                valid.append(claim.model_copy(update={"supports": supports}))
             except CitationError as exc:
                 dropped.update(p for p in claim.addresses if 0 <= p < len(intent.parts))
                 if not any(0 <= p < len(intent.parts) for p in claim.addresses):
