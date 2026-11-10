@@ -7,3 +7,5 @@ __pycache__/
 submission.csv
 data/
 *.egg-info/
+dist/
+playwright-report/

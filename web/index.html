@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#172c3d">
+  <meta name="description" content="Юридический ассистент ПСБ: ответы по документам с проверяемыми основаниями.">
+  <title>ПСБ · Юридический ассистент</title>
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#question">Перейти к вопросу</a>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Диалоги">
+      <a class="brand" href="/" aria-label="ПСБ, юридический ассистент"><span class="brand-symbol" aria-hidden="true"><i></i><i></i></span><strong>ПСБ</strong><span class="brand-divider"></span><span class="brand-label">LEGAL<br>ASSISTANT</span></a>
+      <div class="workspace-label">РАБОЧЕЕ МЕСТО ЮРИСТА</div>
+      <button class="new-chat" id="new-chat" type="button"><span aria-hidden="true">＋</span> Новый диалог</button>
+      <div class="sidebar-heading">Диалоги <span>в этой вкладке</span></div>
+      <nav class="conversation-list" id="conversation-list" aria-label="История диалогов"></nav>
+      <div class="sidebar-bottom">
+        <button class="library-button" id="library-button" type="button"><span class="book-icon" aria-hidden="true">▤</span><span>База документов<small id="document-count">Загружаем каталог</small></span><span aria-hidden="true">↗</span></button>
+        <div class="sidebar-footer"><span class="privacy-dot"></span> Основания всегда под рукой<span class="build-label">Hack&Change 2026</span></div>
+      </div>
+    </aside>
+    <button class="sidebar-backdrop" id="sidebar-backdrop" aria-label="Закрыть меню" hidden></button>
+    <main class="main-area" id="main-area">
+      <header class="topbar">
+        <div class="topbar-left"><button class="icon-button menu-button" id="menu-button" aria-label="Открыть меню" type="button">☰</button><div><span class="header-eyebrow">ПСБ / ПРАВОВАЯ ПОДДЕРЖКА</span><h1>Юридический ассистент</h1></div></div>
+        <div class="header-actions"><span class="service-status" id="service-status"><span class="status-dot"></span><span id="service-status-text">Подключение</span></span><button class="sources-toggle" id="sources-toggle" type="button"><span aria-hidden="true">▤</span> Документы</button></div>
+      </header>
+      <div class="notice" id="service-notice" role="status" hidden></div>
+      <section class="chat-area" id="chat-area" aria-label="Диалог с ассистентом">
+        <div class="welcome" id="welcome">
+          <div class="welcome-icon" aria-hidden="true"><svg viewBox="0 0 40 40" fill="none"><path d="M11 7h13l6 6v20H11V7Z" stroke="currentColor" stroke-width="1.6"/><path d="M23 7v8h7M16 21h9M16 26h7" stroke="currentColor" stroke-width="1.6"/><path d="m7 17 4 3-4 3" stroke="currentColor" stroke-width="1.6"/></svg></div>
+          <div class="eyebrow">ОТ ВОПРОСА — К ОСНОВАНИЮ</div>
+          <h2>Разберёмся<br>по документам.</h2>
+          <p class="welcome-description">Задайте юридический вопрос. Ассистент найдёт положения<br class="desktop-break"> в базе, объяснит вывод и покажет, на что он опирается.</p>
+          <div class="suggestions" aria-label="Примеры вопросов">
+            <button class="suggestion" type="button" data-question="Какой срок оплаты по договору с ООО «Альфа-Трейд»?"><span class="suggestion-icon" aria-hidden="true">↗</span><strong>Проверить условия</strong><span>Какой срок оплаты по договору<br>с «Альфа-Трейд»?</span><span class="suggestion-arrow" aria-hidden="true">→</span></button>
+            <button class="suggestion" type="button" data-question="Кто должен согласовать новый договор по регламенту ООО «Меридиан»?"><span class="suggestion-icon" aria-hidden="true">✓</span><strong>Уточнить порядок</strong><span>Кто должен согласовать<br>новый договор?</span><span class="suggestion-arrow" aria-hidden="true">→</span></button>
+            <button class="suggestion" type="button" data-question="Где и как долго хранятся оригиналы договоров?"><span class="suggestion-icon" aria-hidden="true">▤</span><strong>Найти положение</strong><span>Где и как долго хранятся<br>оригиналы договоров?</span><span class="suggestion-arrow" aria-hidden="true">→</span></button>
+          </div>
+          <div class="welcome-note"><span aria-hidden="true">⌕</span> Только предоставленная база. Если оснований недостаточно — скажем об этом.</div>
+        </div>
+        <div class="messages" id="messages" role="log" aria-live="polite" aria-relevant="additions" hidden></div>
+      </section>
+      <div class="composer-area">
+        <form class="composer" id="chat-form">
+          <label class="sr-only" for="question">Ваш юридический вопрос</label>
+          <textarea id="question" rows="2" maxlength="12000" placeholder="Опишите вопрос. Укажите договор или контрагента, если они известны…" required></textarea>
+          <div class="composer-controls"><label class="date-control" for="as-of"><span aria-hidden="true">▦</span><span>Дата события</span><input id="as-of" type="date" aria-describedby="date-hint"></label><span class="sr-only" id="date-hint">Необязательно. Укажите в вопросе, какое событие произошло в эту дату.</span><span class="keyboard-hint">Enter — отправить</span><button class="send-button" id="send-button" type="submit" aria-label="Отправить вопрос"><span aria-hidden="true">↑</span></button></div>
+        </form>
+        <div class="composer-footer"><span>Проверяйте условия и применимую редакцию по источникам.</span><span class="footer-tag">ЮРИДИЧЕСКИЙ АССИСТЕНТ</span></div>
+      </div>
+    </main>
+    <aside class="document-panel" id="document-panel" aria-label="База и исходный документ" hidden>
+      <div class="panel-topbar"><span class="eyebrow" id="panel-eyebrow">БАЗА ЗНАНИЙ</span><button class="icon-button" id="close-panel" type="button" aria-label="Закрыть документы">✕</button></div>
+      <section class="document-library" id="document-library"><h2>Документы</h2><p class="panel-description">Договоры, регламенты и нормативные положения из базы.</p><label class="document-search"><span aria-hidden="true">⌕</span><input id="document-query" type="search" placeholder="Название, договор, контрагент" aria-label="Поиск в каталоге документов"></label><div class="document-list" id="document-list"></div></section>
+      <section class="document-view" id="document-view" hidden><button class="back-button" id="back-to-library" type="button">← Все документы</button><div class="document-heading"><span class="document-type" id="document-type"></span><h2 id="document-title"></h2><p id="document-meta"></p></div><div class="document-toolbar"><button id="jump-to-quote" type="button" hidden>К цитате ↓</button><a id="download-document" href="#">Скачать текст ↗</a></div><p class="document-message" id="document-message" role="status" hidden></p><div class="document-scroll" id="document-scroll"><pre id="document-text"></pre></div></section>
+    </aside>
+  </div>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

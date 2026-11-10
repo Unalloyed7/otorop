@@ -1,0 +1,36 @@
+services:
+  web:
+    build: .
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8000}:8000"
+    environment:
+      DATA_DIR: /app/data
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      GEN_MODEL: ${GEN_MODEL:-}
+      EMB_MODEL: ${EMB_MODEL:-}
+      RERANKER_MODEL: ${RERANKER_MODEL:-}
+      SEARCH_FACTORY: ${SEARCH_FACTORY:-retrieval:create_search}
+      TEMPERATURE: ${TEMPERATURE:-0}
+      MAX_TOKENS: ${MAX_TOKENS:-2500}
+      MAX_WORKERS: ${MAX_WORKERS:-2}
+      API_TIMEOUT: ${API_TIMEOUT:-60}
+      API_RETRIES: ${API_RETRIES:-2}
+      QUESTION_TIMEOUT: ${QUESTION_TIMEOUT:-240}
+      TOP_K: ${TOP_K:-12}
+      RERANKER_TOP_N: ${RERANKER_TOP_N:-8}
+      VERIFY_ANSWER: ${VERIFY_ANSWER:-1}
+    volumes:
+      - ./data:/app/data:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    init: true

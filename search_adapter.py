@@ -200,7 +200,7 @@ class LexicalSearch:
         return SearchResult(evidence=selected)
 
 
-async def build_search(client: LLMClient):
+async def build_search(client: LLMClient | None):
     factory_path = env_value("SEARCH_FACTORY", default="retrieval:create_search")
     data_dir = Path(env_value("DATA_DIR", default="data"))
     module, attribute = factory_path.split(":", 1)
@@ -209,10 +209,10 @@ async def build_search(client: LLMClient):
     return await backend if inspect.isawaitable(backend) else backend
 
 
-def create_lexical_search(*, data_dir: Path, client: LLMClient):
+def create_lexical_search(*, data_dir: Path, client: LLMClient | None):
     """Резерв включается явно: SEARCH_FACTORY=search_adapter:create_lexical_search."""
     for filename in ("knowledge-base.zip", "kb.zip", "knowledge_base.zip"):
         path = data_dir / filename
         if path.is_file():
-            return LexicalSearch.from_zip(path, client, client.settings.top_k)
+            return LexicalSearch.from_zip(path, client, client.settings.top_k if client else 12)
     raise SearchError("Нет базы знаний в DATA_DIR")
