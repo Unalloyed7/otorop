@@ -17,7 +17,11 @@ from solution import run_submission, validate_submission
 
 
 @pytest.fixture
-def corpus(tmp_path):
+def corpus(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "OTOROP_EMBEDDING_CACHE_DIR",
+        str(tmp_path / "embedding-cache"),
+    )
     sources = {
         "документы компании__Договор поставки Т-1-2026.txt": (
             "ДОГОВОР ПОСТАВКИ № Т-1/2026\nг. Москва — 1 января 2026 г.\n"
@@ -50,7 +54,14 @@ def corpus(tmp_path):
         "регламенты__Регламент согласования договоров.txt": (
             "РЕГЛАМЕНТ СОГЛАСОВАНИЯ ДОГОВОРОВ\n"
             "2.1. Юридический отдел согласовывает проект договора до его подписания.\n"
+            "2.4. Договоры на сумму свыше 15 000 000 рублей подлежат одобрению генеральным директором.\n"
             "2.2. Инициатор прикладывает к заявке спецификацию и сведения о контрагенте.\n"
+        ),
+        "законы__НК_ст164_действующая.txt": (
+            "Источник: Статья 164. НК РФ Налоговые ставки\n"
+            "Статья 164. Налоговые ставки\n"
+            "Не допускается применение разных налоговых ставок в зависимости от того, "
+            "кто является покупателем.\n"
         ),
     }
     with zipfile.ZipFile(tmp_path / "knowledge-base.zip", "w") as archive:
@@ -69,7 +80,22 @@ async def test_team_search_is_default(corpus, local_settings, monkeypatch):
     monkeypatch.delenv("SEARCH_FACTORY", raising=False)
     backend = await build_search(FakeClient(local_settings))
     assert isinstance(backend, SchemaSearchBackend)
-    assert len(backend.index.documents) == 6
+    assert len(backend.index.documents) == 7
+
+
+async def test_bm25_reformulations_retrieve_approval_policy_ahead_of_tax_noise(corpus):
+    index = create_search(corpus).index
+    policy_clause = next(
+        chunk for chunk in index.chunks
+        if chunk["document_type"] == "internal_policy"
+        and chunk["section_reference"] == "2.4"
+    )
+    for query in (
+        "кто должен одобрить договор",
+        "кто одобряет договор",
+    ):
+        results = index.search(query, top_k=3)
+        assert any(item["chunk_id"] == policy_clause["chunk_id"] for item in results), query
 
 
 async def test_contract_filter_keeps_matching_general_policy(corpus):
@@ -96,9 +122,11 @@ class DenseTestClient:
     def __init__(self, settings):
         self.settings = settings
         self.embedding_calls = 0
+        self.embedding_batches = []
 
     async def embeddings(self, texts):
         self.embedding_calls += 1
+        self.embedding_batches.append(list(texts))
         vectors = []
         for text in texts:
             lowered = text.casefold()
@@ -164,7 +192,94 @@ async def test_embeddings_failure_falls_back_to_bm25(corpus, settings):
     )
     assert any(e.section == "4.2" for e in result.evidence)
     assert backend.embedding_status == "disabled_after_error"
-    assert any("продолжен BM25" in message for message in backend.diagnostics)
+    assert any("через BM25" in message for message in backend.diagnostics)
+
+
+async def test_embeddings_failure_uses_cooldown_and_recovers(corpus, settings, monkeypatch):
+    monkeypatch.setenv(
+        "OTOROP_EMBEDDING_CACHE_DIR",
+        str(corpus / "embedding-cache"),
+    )
+    class FlakyEmbeddingClient(DenseTestClient):
+        def __init__(self, client_settings):
+            super().__init__(client_settings)
+            self.vectorizer = DenseTestClient(client_settings)
+
+        async def embeddings(self, texts):
+            self.embedding_calls += 1
+            self.embedding_batches.append(list(texts))
+            if self.embedding_calls <= 2:
+                raise ModelAPIError("/embeddings: HTTP 503")
+            return await self.vectorizer.embeddings(texts)
+
+    client = FlakyEmbeddingClient(settings.model_copy(update={"reranker_model": None}))
+    backend = SchemaSearchBackend(create_search(corpus).index, client=client)
+    filters = SearchFilters(contract_number="Т-1/2026")
+
+    first = await backend.search("срок оплаты по Т-1/2026", filters)
+    assert any(e.section == "4.2" for e in first.evidence)
+    assert backend.embedding_status == "disabled_after_error"
+    first_retry_after = backend._embedding_retry_after
+    assert first_retry_after > 0
+    assert client.embedding_calls == 1
+
+    second = await backend.search("срок оплаты по Т-1/2026", filters)
+    assert any(e.section == "4.2" for e in second.evidence)
+    assert backend.embedding_status == "cooldown"
+    assert client.embedding_calls == 1
+
+    backend._embedding_retry_after = 0
+    await backend.search("срок оплаты по Т-1/2026", filters)
+    assert backend.embedding_status == "disabled_after_error"
+    assert backend._embedding_retry_after > first_retry_after
+    assert client.embedding_calls == 2
+
+    backend._embedding_retry_after = 0
+    recovered = await backend.search("срок оплаты по Т-1/2026", filters)
+    assert any(e.section == "4.2" for e in recovered.evidence)
+    assert backend.embedding_status == "ready"
+    assert client.embedding_calls == 4
+
+
+async def test_embedding_cache_is_reused_and_scoped_by_model(corpus, settings, monkeypatch):
+    cache_dir = corpus / "embedding-cache"
+    monkeypatch.setenv("OTOROP_EMBEDDING_CACHE_DIR", str(cache_dir))
+    index = create_search(corpus).index
+    filters = SearchFilters(contract_number="Т-1/2026")
+
+    first_client = DenseTestClient(settings.model_copy(update={"reranker_model": None}))
+    first_backend = SchemaSearchBackend(index, client=first_client)
+    await first_backend.search("срок оплаты по Т-1/2026", filters)
+    assert first_backend.embedding_status == "ready"
+    assert len(list(cache_dir.glob("*.json"))) == 1
+    assert len(first_client.embedding_batches[0]) == len(index.chunks)
+
+    second_client = DenseTestClient(settings.model_copy(update={"reranker_model": None}))
+    second_backend = SchemaSearchBackend(index, client=second_client)
+    await second_backend.search("гарантия по Т-1/2026", filters)
+    assert second_backend.embedding_status == "ready"
+    assert second_client.embedding_batches == [["гарантия по Т-1/2026"]]
+
+    other_model = settings.model_copy(
+        update={"embedding_model": "different-test-embedding", "reranker_model": None}
+    )
+    other_client = DenseTestClient(other_model)
+    other_backend = SchemaSearchBackend(index, client=other_client)
+    await other_backend.search("срок оплаты по Т-1/2026", filters)
+    assert len(list(cache_dir.glob("*.json"))) == 2
+    assert len(other_client.embedding_batches[0]) == len(index.chunks)
+
+    with zipfile.ZipFile(corpus / "knowledge-base.zip", "a") as archive:
+        archive.writestr(
+            "документы компании__Дополнительный материал.txt",
+            "Дополнительный документ для проверки смены fingerprint базы.",
+        )
+    changed_index = create_search(corpus).index
+    changed_client = DenseTestClient(settings.model_copy(update={"reranker_model": None}))
+    changed_backend = SchemaSearchBackend(changed_index, client=changed_client)
+    await changed_backend.search("срок оплаты по Т-1/2026", filters)
+    assert len(list(cache_dir.glob("*.json"))) == 3
+    assert len(changed_client.embedding_batches[0]) == len(changed_index.chunks)
 
 
 async def test_reranker_failure_preserves_hybrid_results(corpus, settings):

@@ -12,6 +12,7 @@ import math
 import os
 import re
 import sys
+import tempfile
 import time
 import tracemalloc
 from collections import Counter, defaultdict
@@ -22,7 +23,10 @@ from typing import Any
 from documents import PROCESSOR_VERSION, load_documents, split_document
 from llm_client import LLMClient, ModelAPIError, ModelProtocolError, Settings
 
-RETRIEVAL_VERSION = "retrieval-v2"
+RETRIEVAL_VERSION = "retrieval-v3"
+EMBEDDING_CACHE_VERSION = 1
+EMBEDDING_RETRY_BASE_SECONDS = 30.0
+EMBEDDING_RETRY_MAX_SECONDS = 300.0
 logger = logging.getLogger(__name__)
 _TOKEN_RE = re.compile(
     r"[a-zа-яё]+\s*[-–—]\s*\d+(?:\s*/\s*\d+)?|"
@@ -57,11 +61,14 @@ _QUERY_SYNONYMS = {
     "аванс": ("предоплат",),
     "отнест": ("переда", "сдат"),
     "юротдел": ("юридическ", "отдел"),
+    "одобр": ("соглас", "утвержд"),
+    "соглас": ("одобр", "утвержд"),
+    "утвержд": ("одобр", "соглас"),
 }
 _QUERY_STOPWORDS = {
     "а", "и", "или", "по", "с", "в", "на", "к", "от", "до", "для", "что",
     "как", "где", "когда", "какой", "какая", "какие", "нас", "наш", "наши",
-    "это", "ли", "бы", "же", "договор",
+    "это", "ли", "бы", "же", "договор", "кто", "должен",
 }
 
 
@@ -72,6 +79,12 @@ def _normalize(value: str) -> str:
 def _stem_token(token: str) -> str:
     if not re.fullmatch(r"[а-яё]+", token):
         return token
+    if token.startswith("одобр"):
+        return "одобр"
+    if token.startswith("соглас"):
+        return "соглас"
+    if token.startswith(("утвержд", "утверд")):
+        return "утвержд"
     if token.startswith("оплач"):
         return "оплат"
     if token.startswith(("гарант", "претенз")):
@@ -304,6 +317,11 @@ class SearchIndex:
             for synonym in _QUERY_SYNONYMS.get(token, ())
             if synonym not in query_tokens
         })
+        alias_weight = (
+            0.5
+            if set(query_tokens).intersection({"одобр", "соглас", "утвержд"})
+            else 3.0
+        )
         normalized_query = _normalize(query)
         query_references = {match.group(1).rstrip(".") for match in _REFERENCE_RE.finditer(query)}
         as_of = _date(filters.get("as_of") or filters.get("valid_on") or filters.get("event_date"))
@@ -381,7 +399,7 @@ class SearchIndex:
 
             score = self._bm25(bm25_query_tokens, position)
             if query_aliases:
-                score += self._bm25(query_aliases, position) * 3.0
+                score += self._bm25(query_aliases, position) * alias_weight
             if (wanted_contract or query_contracts) and bm25_query_tokens:
                 focus_tokens = set(bm25_query_tokens) | set(query_aliases)
                 if not focus_tokens.intersection(self._term_frequencies[position]):
@@ -636,6 +654,114 @@ class SchemaSearchBackend:
         self.diagnostics: list[str] = []
         self.embedding_status = "not_configured"
         self.reranker_status = "not_configured"
+        self._embedding_failures = 0
+        self._embedding_retry_after = 0.0
+        self._embedding_cache_file: Path | None = None
+
+    def _cache_path(self) -> Path:
+        if self._embedding_cache_file is None:
+            cache_root = os.environ.get("OTOROP_EMBEDDING_CACHE_DIR")
+            if not cache_root:
+                cache_root = str(
+                    Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
+                    / "otorop"
+                    / "embeddings"
+                )
+            cache_identity = json.dumps(
+                {
+                    "cache_version": EMBEDDING_CACHE_VERSION,
+                    "fingerprint": self.index.fingerprint,
+                    "model": self.client.settings.embedding_model,
+                    "base_url": self.client.settings.base_url,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            cache_name = hashlib.sha256(cache_identity.encode("utf-8")).hexdigest()
+            self._embedding_cache_file = Path(cache_root) / f"{cache_name}.json"
+        return self._embedding_cache_file
+
+    def _load_cached_vectors(self) -> dict[str, list[float]] | None:
+        cache_path = self._cache_path()
+        try:
+            with cache_path.open(encoding="utf-8") as stream:
+                payload = json.load(stream)
+            if (
+                not isinstance(payload, dict)
+                or payload.get("cache_version") != EMBEDDING_CACHE_VERSION
+                or payload.get("fingerprint") != self.index.fingerprint
+                or payload.get("model") != self.client.settings.embedding_model
+                or payload.get("base_url") != self.client.settings.base_url
+            ):
+                raise ValueError("метаданные кэша не совпадают с индексом или моделью")
+            raw_vectors = payload.get("vectors")
+            expected_ids = {chunk["chunk_id"] for chunk in self.index.chunks}
+            if not isinstance(raw_vectors, dict) or set(raw_vectors) != expected_ids:
+                raise ValueError("набор фрагментов в кэше не совпадает с индексом")
+            vectors: dict[str, list[float]] = {}
+            dimension: int | None = None
+            for chunk_id, raw_vector in raw_vectors.items():
+                if (
+                    not isinstance(raw_vector, list)
+                    or not raw_vector
+                    or any(type(value) not in (int, float) or not math.isfinite(value) for value in raw_vector)
+                ):
+                    raise ValueError("в кэше найден некорректный вектор")
+                if dimension is None:
+                    dimension = len(raw_vector)
+                elif len(raw_vector) != dimension:
+                    raise ValueError("размерности векторов в кэше различаются")
+                vectors[chunk_id] = [float(value) for value in raw_vector]
+            return vectors
+        except FileNotFoundError:
+            return None
+        except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            diagnostic = f"кэш embeddings проигнорирован: {exc}"
+            self.diagnostics.append(diagnostic)
+            logger.warning("retrieval: %s", diagnostic)
+            return None
+
+    def _save_cached_vectors(self, vectors: dict[str, list[float]]) -> None:
+        cache_path = self._cache_path()
+        temporary_path: Path | None = None
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=cache_path.parent,
+                prefix=".embedding-cache-",
+                suffix=".tmp",
+                delete=False,
+            ) as stream:
+                temporary_path = Path(stream.name)
+                json.dump(
+                    {
+                        "cache_version": EMBEDDING_CACHE_VERSION,
+                        "fingerprint": self.index.fingerprint,
+                        "model": self.client.settings.embedding_model,
+                        "base_url": self.client.settings.base_url,
+                        "vectors": vectors,
+                    },
+                    stream,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary_path, cache_path)
+        except (OSError, TypeError, ValueError) as exc:
+            diagnostic = f"кэш embeddings не сохранён; векторы останутся в памяти: {exc}"
+            self.diagnostics.append(diagnostic)
+            logger.warning("retrieval: %s", diagnostic)
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError as cleanup_exc:
+                    cleanup_diagnostic = f"временный файл кэша не удалён: {cleanup_exc}"
+                    self.diagnostics.append(cleanup_diagnostic)
+                    logger.warning("retrieval: %s", cleanup_diagnostic)
 
     def get_document(self, document_id: str) -> dict[str, Any]:
         return self.index.get_document(document_id)
@@ -840,6 +966,13 @@ class SchemaSearchBackend:
             if self._document_vectors is not None:
                 self.embedding_status = "ready"
                 return self._document_vectors
+            cached_vectors = self._load_cached_vectors()
+            if cached_vectors is not None:
+                self._document_vectors = cached_vectors
+                self._embedding_failures = 0
+                self._embedding_retry_after = 0.0
+                self.embedding_status = "ready"
+                return cached_vectors
             texts = [
                 f"{chunk['title']}\n{chunk.get('section_reference') or ''}\n{chunk['text']}"
                 for chunk in self.index.chunks
@@ -858,6 +991,9 @@ class SchemaSearchBackend:
                         raise ModelProtocolError("/embeddings: размерность векторов корпуса различается")
                     vectors[chunk["chunk_id"]] = vector
             self._document_vectors = vectors
+            self._save_cached_vectors(vectors)
+            self._embedding_failures = 0
+            self._embedding_retry_after = 0.0
             self.embedding_status = "ready"
             return vectors
 
@@ -880,26 +1016,41 @@ class SchemaSearchBackend:
         configured_embeddings = (
             self.client is not None and bool(self.client.settings.embedding_model)
         )
-        mode = "hybrid" if configured_embeddings else "bm25"
+        in_cooldown = configured_embeddings and time.monotonic() < self._embedding_retry_after
+        mode = "hybrid" if configured_embeddings and not in_cooldown else "bm25"
+        if in_cooldown:
+            self.embedding_status = "cooldown"
         try:
             return await self.search_with_mode(
                 query,
                 filters,
                 mode,
-                apply_reranker=bool(self.client and self.client.settings.reranker_model),
+                apply_reranker=(
+                    mode == "hybrid"
+                    and bool(self.client and self.client.settings.reranker_model)
+                ),
             )
         except ModelAPIError as exc:
             if not configured_embeddings:
                 raise
+            self._embedding_failures = min(self._embedding_failures + 1, 5)
+            retry_delay = min(
+                EMBEDDING_RETRY_BASE_SECONDS * (2 ** (self._embedding_failures - 1)),
+                EMBEDDING_RETRY_MAX_SECONDS,
+            )
+            self._embedding_retry_after = time.monotonic() + retry_delay
             self.embedding_status = "disabled_after_error"
-            diagnostic = f"bge-m3 недоступен; продолжен BM25: {exc}"
+            diagnostic = (
+                f"embeddings недоступны; повтор через {retry_delay:g} с; "
+                f"текущий запрос продолжен через BM25: {exc}"
+            )
             self.diagnostics.append(diagnostic)
             logger.warning("retrieval: %s", diagnostic)
             return await self.search_with_mode(
                 query,
                 filters,
                 "bm25",
-                apply_reranker=bool(self.client and self.client.settings.reranker_model),
+                apply_reranker=False,
             )
 
 

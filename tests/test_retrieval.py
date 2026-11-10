@@ -73,6 +73,27 @@ class RetrievalTests(unittest.TestCase):
             <= {item["counterparty"] for item in ambiguous if item["counterparty"]}
         )
 
+    def test_approval_reformulations_retrieve_current_policy_clause(self) -> None:
+        target = next(
+            chunk for chunk in self.index.chunks
+            if "Регламент согласования договоров ред 2025" in chunk["source_file"]
+            and chunk.get("section_reference") == "2.4"
+        )
+        for query in (
+            "кто должен одобрить договор",
+            "кто одобряет договор",
+        ):
+            results = self.index.search(query, top_k=10)
+            self.assertIn(
+                target["chunk_id"],
+                {item["chunk_id"] for item in results},
+                f"Положение не найдено для переформулировки: {query}",
+            )
+            self.assertTrue(
+                all("НК_" not in item["source_file"] for item in results[:2]),
+                f"Налоговая статья вытеснила регламент для: {query}",
+            )
+
     def test_as_of_selects_historical_policy(self) -> None:
         results = self.index.search(
             "срок согласования юридическим отделом",

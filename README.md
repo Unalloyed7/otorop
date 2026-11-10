@@ -47,8 +47,10 @@ DATA_DIR=data .venv/bin/python solution.py
 Модуль `retrieval.py` строит индекс по базе один раз. По умолчанию поиск
 совмещает BM25 с embeddings из `EMB_MODEL`; без embeddings или при их сбое
 работает BM25 fallback. Подключённый `RERANKER_MODEL` применяется как
-необязательный реранкер. Синхронная фабрика возвращает backend с асинхронным
-методом `search`, совместимым с `schemas.SearchResult`:
+необязательный реранкер. После ошибки embeddings BM25 используется с
+экспоненциальной паузой перед следующей попыткой; корпусные векторы кэшируются
+вне репозитория по fingerprint базы и model ID. Синхронная фабрика возвращает
+backend с асинхронным методом `search`, совместимым с `schemas.SearchResult`:
 
 ```bash
 DATA_DIR=data SEARCH_FACTORY=retrieval:create_search .venv/bin/python solution.py
@@ -96,6 +98,7 @@ flowchart LR
 | LLM_API_KEY / OPENAI_API_KEY | Общий ключ прокси, без записи в код/логи. |
 | LLM_MODEL / OPENAI_MODEL / GEN_MODEL | ID генерации, по приоритету слева направо. На платформе DeepSeek V4.1 Flash. |
 | EMB_MODEL | Выданный ID bge-m3; требуется для вызова embeddings. |
+| OTOROP_EMBEDDING_CACHE_DIR | Необязательный каталог кэша корпусных embeddings; по умолчанию `~/.cache/otorop/embeddings`. |
 | RERANKER_MODEL | Выданный ID Qwen3 Reranker 8B; без него резервный поиск не вызывает rerank. |
 | DATA_DIR | Каталог входа, по умолчанию `data`. |
 | TEMPERATURE, MAX_TOKENS | 0 и 2500 по умолчанию. |
