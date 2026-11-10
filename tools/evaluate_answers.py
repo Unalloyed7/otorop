@@ -4,12 +4,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections import Counter
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -22,6 +25,22 @@ from solution import run_submission
 def read_records(path):
     # U+0085 внутри текста не является границей JSONL.
     return [json.loads(line) for line in path.read_text(encoding="utf-8").split("\n") if line]
+
+
+@contextmanager
+def isolated_embedding_cache():
+    """Оба режима начинают с холодного кэша; пользовательский кэш не удаляется."""
+    key = "OTOROP_EMBEDDING_CACHE_DIR"
+    previous = os.environ.get(key)
+    with tempfile.TemporaryDirectory(prefix="otorop-eval-embeddings-") as directory:
+        os.environ[key] = directory
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = previous
 
 
 def compare_records(baseline, checked):
@@ -45,15 +64,16 @@ async def evaluate(data_dir: Path, output: Path, mode: str):
     records = {}
     for verify in variants:
         label = "verify-1" if verify else "verify-0"
-        async with LLMClient(settings) as client:
-            backend = await build_search(client)
-            engine = LegalAssistant(backend, client, verify=verify)
-            report = output / (label + ".jsonl")
-            counts = await run_submission(data_dir, output / (label + ".csv"), engine=engine, workers=settings.max_workers, report_path=report)
-            records[label] = read_records(report)
-            calls = Counter()
-            for record in records[label]: calls.update(record.get("calls", {}))
-            manifest["variants"][label] = {"statuses": counts, "calls": dict(calls), "index_fingerprint": getattr(getattr(backend, "index", None), "fingerprint", None)}
+        with isolated_embedding_cache():
+            async with LLMClient(settings) as client:
+                backend = await build_search(client)
+                engine = LegalAssistant(backend, client, verify=verify)
+                report = output / (label + ".jsonl")
+                counts = await run_submission(data_dir, output / (label + ".csv"), engine=engine, workers=settings.max_workers, report_path=report)
+                records[label] = read_records(report)
+                calls = Counter()
+                for record in records[label]: calls.update(record.get("calls", {}))
+                manifest["variants"][label] = {"statuses": counts, "calls": dict(calls), "embedding_cache": "isolated cold cache per variant", "index_fingerprint": getattr(getattr(backend, "index", None), "fingerprint", None)}
     if mode == "both":
         (output / "comparison.json").write_text(json.dumps(compare_records(records["verify-0"], records["verify-1"]), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     # Model IDs выдаёт оператор; страховка от случайного повторения ключа в них.

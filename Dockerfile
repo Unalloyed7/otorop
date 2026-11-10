@@ -3,7 +3,8 @@ FROM python:3.12-slim-bookworm
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    DATA_DIR=/app/data
+    DATA_DIR=/app/data \
+    OTOROP_EMBEDDING_CACHE_DIR=/tmp/otorop/embeddings
 WORKDIR /app
 COPY requirements.txt requirements-web.txt ./
 RUN pip install --no-cache-dir -r requirements-web.txt \

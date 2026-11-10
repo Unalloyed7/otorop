@@ -108,3 +108,19 @@ async def test_report_keeps_truncated_output_and_finish_reason(settings):
     assert answer.status == "error"
     assert run["chat_responses"][0]["finish_reason"] == "length"
     assert run["chat_responses"][0]["output"] == '{"action":'
+
+
+def test_evaluation_cache_is_isolated_and_user_setting_restored(tmp_path, monkeypatch):
+    import os
+    from tools.evaluate_answers import isolated_embedding_cache
+    owned = tmp_path / "user-cache"
+    owned.mkdir()
+    (owned / "keep").write_text("keep")
+    monkeypatch.setenv("OTOROP_EMBEDDING_CACHE_DIR", str(owned))
+    with isolated_embedding_cache():
+        first = Path(os.environ["OTOROP_EMBEDDING_CACHE_DIR"])
+        assert first != owned and first.exists()
+    assert not first.exists() and (owned / "keep").read_text() == "keep"
+    assert os.environ["OTOROP_EMBEDDING_CACHE_DIR"] == str(owned)
+    with isolated_embedding_cache():
+        assert Path(os.environ["OTOROP_EMBEDDING_CACHE_DIR"]) != first

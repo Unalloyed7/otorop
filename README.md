@@ -98,7 +98,7 @@ flowchart LR
 | LLM_API_KEY / OPENAI_API_KEY | Общий ключ прокси, без записи в код/логи. |
 | LLM_MODEL / OPENAI_MODEL / GEN_MODEL | ID генерации, по приоритету слева направо. На платформе DeepSeek V4.1 Flash. |
 | EMB_MODEL | Выданный ID bge-m3; требуется для вызова embeddings. |
-| OTOROP_EMBEDDING_CACHE_DIR | Необязательный каталог кэша корпусных embeddings; по умолчанию `~/.cache/otorop/embeddings`. |
+| OTOROP_EMBEDDING_CACHE_DIR | Каталог кэша корпусных embeddings: для solution.py и Docker по умолчанию `/tmp/otorop/embeddings`; при прямом вызове retrieval — `~/.cache/otorop/embeddings`. |
 | RERANKER_MODEL | Выданный ID Qwen3 Reranker 8B; без него резервный поиск не вызывает rerank. |
 | DATA_DIR | Каталог входа, по умолчанию `data`. |
 | TEMPERATURE, MAX_TOKENS | 0 и 2500 по умолчанию. |

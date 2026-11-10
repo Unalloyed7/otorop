@@ -174,6 +174,9 @@ async def run_submission(data_dir: Path, output: Path = Path("submission.csv"), 
             override = getattr(options, "VERIFY_ANSWER", None)
             if type(override) is bool:
                 settings = settings.model_copy(update={"verify": override})
+            # Регламент гарантирует запись в рабочий каталог и /tmp, не в HOME.
+            if not env_value("OTOROP_EMBEDDING_CACHE_DIR"):
+                os.environ["OTOROP_EMBEDDING_CACHE_DIR"] = str(Path(tempfile.gettempdir()) / "otorop" / "embeddings")
             client = LLMClient(settings)
             search = await build_search(client)
             results = await _process(rows, LegalAssistant(search, client), settings.max_workers, budget, report_path=report)

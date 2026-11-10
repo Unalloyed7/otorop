@@ -5,6 +5,7 @@ services:
       - "127.0.0.1:${WEB_PORT:-8000}:8000"
     environment:
       DATA_DIR: /app/data
+      OTOROP_EMBEDDING_CACHE_DIR: ${OTOROP_EMBEDDING_CACHE_DIR:-/tmp/otorop/embeddings}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
