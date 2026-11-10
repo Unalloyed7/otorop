@@ -16,14 +16,14 @@ import tempfile
 import time
 import tracemalloc
 from collections import Counter, defaultdict
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from documents import PROCESSOR_VERSION, load_documents, split_document
 from llm_client import LLMClient, ModelAPIError, ModelProtocolError, Settings
 
-RETRIEVAL_VERSION = "retrieval-v3"
+RETRIEVAL_VERSION = "retrieval-v4"
 EMBEDDING_CACHE_VERSION = 1
 EMBEDDING_RETRY_BASE_SECONDS = 30.0
 EMBEDDING_RETRY_MAX_SECONDS = 300.0
@@ -46,7 +46,7 @@ _RU_SUFFIXES = sorted(
         "аться", "енных", "енный", "ение", "ения", "ению", "ением", "аний",
         "ание", "ания", "анию", "анием", "остью", "остью", "остью", "иями",
         "ого", "ему", "ому", "ими", "ыми", "его", "ая", "яя", "ое", "ее",
-        "ые", "ие", "ий", "ый", "ой", "ую", "юю", "ою", "ею", "ам", "ям",
+        "ые", "ие", "ий", "ый", "ой", "ых", "ую", "юю", "ою", "ею", "ам", "ям",
         "ах", "ях", "ов", "ев", "ом", "ем", "ым", "им", "ей", "ой", "ия",
         "ии", "ию", "ать", "ить", "ется", "атся", "ится", "ю", "а", "я", "ы",
         "и", "о", "е", "у", "ь",
@@ -327,6 +327,7 @@ class SearchIndex:
         as_of = _date(filters.get("as_of") or filters.get("valid_on") or filters.get("event_date"))
         spec_date = _date(filters.get("specification_signed_at"))
         signed_date = _date(filters.get("signed_at"))
+        policy_date = as_of or signed_date or spec_date or datetime.now(timezone(timedelta(hours=3))).date().isoformat()
         snapshot_date = _date(filters.get("snapshot_date"))
         wanted_contract = filters.get("contract_number")
         wanted_contract = _normalize_contract(str(wanted_contract)) if wanted_contract else None
@@ -383,6 +384,11 @@ class SearchIndex:
                 if not parties.intersection(wanted_parties) and not is_global_context:
                     continue
             if wanted_type and document.get("document_type") != wanted_type:
+                continue
+            if document.get("document_type") == "internal_policy" and (
+                (document.get("valid_from") and policy_date < document["valid_from"])
+                or (document.get("valid_to") and policy_date >= document["valid_to"])
+            ):
                 continue
             if as_of and (
                 (document.get("valid_from") and as_of < document["valid_from"])
@@ -888,6 +894,8 @@ class SchemaSearchBackend:
             for date_key in ("valid_from_source", "valid_to_source"):
                 if item.get(date_key) and item[date_key] not in conditions:
                     conditions.append(item[date_key])
+            if item.get("renewal"):
+                conditions.append(item["renewal"]["source_text"])
             applicability_result = item.get("applicability") or {}
             source_date_kinds = {
                 condition.get("kind")
@@ -919,6 +927,7 @@ class SchemaSearchBackend:
                     "date_uncertainties",
                     "date_sources",
                     "provision_date_sources",
+                    "renewal",
                     "score",
                     "retrieval_reason",
                 )
@@ -944,7 +953,7 @@ class SchemaSearchBackend:
                     ),
                     valid_from=item.get("valid_from"),
                     valid_to=item.get("valid_to"),
-                    date_kind=next(iter(source_date_kinds)) if len(source_date_kinds) == 1 else None,
+                    date_kind="event" if document.get("document_type") == "internal_policy" else (next(iter(source_date_kinds)) if len(source_date_kinds) == 1 else None),
                     conditions=conditions,
                     current_only=current_only,
                     snapshot_date=snapshot,

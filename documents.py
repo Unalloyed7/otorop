@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from xml.etree import ElementTree as ET
 
-PROCESSOR_VERSION = "documents-v3"
+PROCESSOR_VERSION = "documents-v4"
 SUPPORTED_SUFFIXES = {".txt", ".md", ".docx"}
 
 _CONTRACT_RE = re.compile(
@@ -199,6 +199,16 @@ def _extract_metadata(source_file: str, text: str) -> dict[str, Any]:
         end_date = date.fromisoformat(valid_to) + timedelta(days=1)
         valid_to = end_date.isoformat()
         valid_to_source = f"{valid_to_source} (исключительная граница: {valid_to})"
+    renewal = None
+    if document_type == "agreement" and valid_to:
+        for line in text.split("\n"):
+            if not re.search(r"автоматически\s+продлева", line, re.I):
+                continue
+            initial_end, _ = _first_date_with_source(r"действует\s+до", line)
+            if initial_end and (date.fromisoformat(initial_end) + timedelta(days=1)).isoformat() == valid_to:
+                renewal = {"initial_valid_to": valid_to, "status": "unknown", "source_text": line.strip()}
+                valid_to = valid_to_source = None
+                break
     snapshot_date, snapshot_date_source = _first_date_with_source(
         r"(?:дата\s+выгрузки|дата\s+снимка|дата\s+получения\s+редакции)\s*[:—-]?\s*",
         text[:2000],
@@ -256,6 +266,8 @@ def _extract_metadata(source_file: str, text: str) -> dict[str, Any]:
             })
 
     uncertainties: list[str] = []
+    if renewal:
+        uncertainties.append("Есть условие автоматического продления; наличие уведомления о прекращении не установлено.")
     if valid_to and not valid_from:
         uncertainties.append("Дата начала действия документа в тексте явно не указана.")
     if document_type == "law" and not valid_from and not valid_to:
@@ -302,6 +314,7 @@ def _extract_metadata(source_file: str, text: str) -> dict[str, Any]:
         "valid_from_source": valid_from_source,
         "valid_to": valid_to,
         "valid_to_source": valid_to_source,
+        "renewal": renewal,
         "snapshot_date": snapshot_date,
         "snapshot_date_source": snapshot_date_source,
         "date_sources": date_sources,

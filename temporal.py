@@ -62,6 +62,10 @@ def mode_for(filters: SearchFilters, requested: str, reference: date) -> str:
 def temporal_issue(e: Evidence, filters: SearchFilters, *, mode: str, reference: date) -> str | None:
     a, when = e.applicability, filters.event_date
     if not a.current_only:
+        if e.metadata.get("document_type") == "internal_policy":
+            target = when or reference
+            if (a.valid_from and target < a.valid_from) or (a.valid_to and target >= a.valid_to):
+                return "Редакция регламента не действует на рассматриваемую дату"
         if when and a.date_kind in {"event", filters.date_kind} and ((a.valid_from and when < a.valid_from) or (a.valid_to and when >= a.valid_to)):
             return "Редакция не действует на дату события"
         return None

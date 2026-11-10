@@ -92,6 +92,15 @@ VERIFY_PROMPT = BOUNDARY + """
 Не переписывай выводы. Самопроверка может ошибаться: при сомнении исключи claim.
 """
 
+_RENEWAL_NOTE = """
+metadata.renewal.status=unknown: договор предусматривает автоматическое продление,
+но база не подтверждает отсутствие уведомления о прекращении. После initial_valid_to
+можно разъяснить условие договора, сохранив условность его действия и назвав пробел;
+нельзя ни объявлять договор прекратившимся, ни утверждать продление как установленный факт.
+"""
+DRAFT_PROMPT += _RENEWAL_NOTE
+VERIFY_PROMPT += _RENEWAL_NOTE
+
 
 class SearchBackend(Protocol):
     async def search(self, query: str, filters: SearchFilters) -> SearchResult: ...
@@ -99,6 +108,26 @@ class SearchBackend(Protocol):
 
 class CitationError(ValueError):
     pass
+
+
+def _text_history(text: str) -> list[dict]:
+    markers = list(re.finditer(r"(?im)^[ \t]*(пользователь|ассистент|user|assistant)[ \t]*:[ \t]*", text))
+    roles = {"пользователь": "user", "user": "user", "ассистент": "assistant", "assistant": "assistant"}
+    # Только явно оформленный завершённый диалог. Остальной текст остаётся
+    # одной пользовательской репликой; system/tool никогда не получают роль.
+    if (len(markers) < 3 or text[:markers[0].start()].strip()
+            or roles[markers[0][1].casefold()] != "user"
+            or roles[markers[-1][1].casefold()] != "user"
+            or not any(roles[m[1].casefold()] == "assistant" for m in markers)):
+        return [{"role": "user", "content": text}]
+    result = []
+    for i, marker in enumerate(markers):
+        end = markers[i+1].start() if i+1 < len(markers) else len(text)
+        content = text[marker.end():end].strip()
+        if not content:
+            return [{"role": "user", "content": text}]
+        result.append({"role": roles[marker[1].casefold()], "content": content})
+    return result
 
 
 def parse_messages(messages: str | Sequence[Message | dict]) -> list[Message]:
@@ -111,7 +140,7 @@ def parse_messages(messages: str | Sequence[Message | dict]) -> list[Message]:
         if isinstance(candidate, list):
             messages = candidate
         else:
-            messages = [{"role": "user", "content": messages}]
+            messages = _text_history(messages)
     result = []
     for item in messages:
         if isinstance(item, Message):

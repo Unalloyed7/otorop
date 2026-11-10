@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import math
 import os
@@ -13,8 +14,36 @@ from typing import TypeVar
 import httpx
 from diagnostics import active_run
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_validator
+from schemas import Draft, Verdict
 
 T = TypeVar("T", bound=BaseModel)
+
+
+def compact_evidence(data: dict) -> tuple[dict, dict, dict]:
+    """Убрать повтор метаданных в HTTP-контексте; оригиналы остаются у движка."""
+    result = copy.deepcopy(data)
+    documents, passages, chunk_ids, document_ids = {}, [], {}, {}
+    for source in result.get("evidence", []):
+        original_document, original_chunk = source["document_id"], source["chunk_id"]
+        document_alias = document_ids.setdefault(original_document, f"d{len(document_ids)+1}")
+        chunk_alias = chunk_ids.setdefault(original_chunk, f"e{len(chunk_ids)+1}")
+        common = {key: source[key] for key in ("document_title", "contract_number", "counterparty", "applicability", "metadata") if key in source}
+        if "metadata" in common:
+            common["metadata"] = {k: v for k, v in common["metadata"].items() if k not in {"score", "retrieval_reason"}}
+        passage = {"chunk_id": chunk_alias, "document_id": document_alias, "section": source["section"], "text": source["text"]}
+        if document_alias not in documents:
+            documents[document_alias] = common
+        else:
+            # Свойства отдельного фрагмента не подменяются свойствами соседнего.
+            passage.update({k: v for k, v in common.items() if documents[document_alias].get(k) != v})
+        passages.append(passage)
+    result["documents"], result["evidence"] = documents, passages
+    for key in ("claims", "previous_claims"):
+        for claim in result.get(key, []):
+            for support in claim.get("supports", []):
+                support["document_id"] = document_ids.get(support.get("document_id"), support.get("document_id"))
+                support["chunk_id"] = chunk_ids.get(support.get("chunk_id"), support.get("chunk_id"))
+    return result, {v: k for k, v in document_ids.items()}, {v: k for k, v in chunk_ids.items()}
 
 
 class ModelAPIError(RuntimeError):
@@ -179,9 +208,18 @@ class LLMClient:
 
     async def structured(self, instruction: str, data: dict, schema: type[T]) -> T:
         # JSON-mode не предполагается: обычный текст, строгий JSON + Pydantic.
+        wire_data, document_ids, chunk_ids = data, {}, {}
+        if schema in {Draft, Verdict} and data.get("evidence"):
+            wire_data, document_ids, chunk_ids = compact_evidence(data)
+            instruction += "\nНазвания и общие свойства источников — в documents по document_id. Фрагмент evidence наследует свойства документа, а явно указанные в нём свойства заменяют общие. Для supports используй только переданные короткие chunk_id и document_id; quote — точный текст. Это локальные обозначения источников, не юридические факты."
+            run = active_run()
+            if run is not None:
+                run["stages"].append({"stage": "model_context", "schema": schema.__name__, "before_chars": len(json.dumps(data, ensure_ascii=False)), "after_chars": len(json.dumps(wire_data, ensure_ascii=False)), "document_ids": document_ids, "chunk_ids": chunk_ids})
+        system = instruction + "\nСхема результата:\n" + json.dumps(schema.model_json_schema(), ensure_ascii=False)
+        system += "\nВерни экземпляр JSON-объекта с полями " + ", ".join(schema.model_fields) + ". Заполни его по данным. Не возвращай описание схемы, $defs или properties. Не добавляй текст вне JSON."
         content = await self.chat([
-            {"role": "system", "content": instruction + "\nВерни только JSON по схеме:\n" + json.dumps(schema.model_json_schema(), ensure_ascii=False)},
-            {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
+            {"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(wire_data, ensure_ascii=False)},
         ])
         run = active_run()
         event = {"schema": schema.__name__, "output": content, "valid": False}
@@ -190,7 +228,21 @@ class LLMClient:
         if content.startswith("```json\n") and content.endswith("\n```"):
             content = content[8:-4]
         try:
-            result = schema.model_validate_json(content)
+            if schema is Draft and chunk_ids:
+                parsed = json.loads(content)
+                if isinstance(parsed, dict) and isinstance(parsed.get("claims"), list):
+                    for claim in parsed["claims"]:
+                        if not isinstance(claim, dict) or not isinstance(claim.get("supports"), list):
+                            continue
+                        for support in claim["supports"]:
+                            if isinstance(support, dict):
+                                for field, mapping in (("document_id", document_ids), ("chunk_id", chunk_ids)):
+                                    value = support.get(field)
+                                    if isinstance(value, str):
+                                        support[field] = mapping.get(value, value)
+                result = schema.model_validate(parsed)
+            else:
+                result = schema.model_validate_json(content)
             event["valid"] = True
             return result
         except (ValueError, ValidationError):
