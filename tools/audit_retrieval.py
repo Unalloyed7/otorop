@@ -23,7 +23,7 @@ def matches(chunk, target):
             and (not target.get("contains") or target["contains"] in chunk["text"]))
 
 
-async def audit(data_dir, annotations, *, top_k=12):
+async def audit(data_dir, annotations, *, top_k=12, bundle=False):
     backend = create_search(data_dir)
     backend.top_k = top_k
     reference = datetime.now(timezone(timedelta(hours=3))).date()
@@ -37,7 +37,14 @@ async def audit(data_dir, annotations, *, top_k=12):
         modes = ["annotated"] + (["raw"] if case.get("question_id") in questions else [])
         for mode in modes:
             filters = SearchFilters.model_validate(case.get("filters", {}) if mode == "annotated" else {})
-            result = await backend.search(case["query"] if mode == "annotated" else questions[case["question_id"]], filters)
+            query = case["query"] if mode == "annotated" else questions[case["question_id"]]
+            if bundle:
+                result = backend.bundle_result(await backend.search_bundle(
+                    [query], filters, top_k=top_k,
+                    max_context_chars=60000, max_context_chunks=top_k * 2,
+                ))
+            else:
+                result = await backend.search(query, filters)
             eligible = [e for e in result.evidence if temporal_issue(e, filters, mode="auto", reference=reference) is None]
             ids = {e.chunk_id for e in eligible}
             checks = []
@@ -57,7 +64,7 @@ async def audit(data_dir, annotations, *, top_k=12):
                     assert restored[key] == evidence[key], key
                 assert restored["metadata"] == {k: v for k, v in evidence["metadata"].items() if k not in {"score", "retrieval_reason"}}
             rows.append({"id": case["id"], "mode": mode, "checks": checks, "all_required": all(c["found"] for c in checks), "unwanted_ids": unwanted, "passed": all(c["found"] for c in checks) and not unwanted, "evidence_ids": [e.chunk_id for e in result.evidence], "eligible_ids": [e.chunk_id for e in eligible], "payload_before_chars": len(json.dumps(original, ensure_ascii=False)), "payload_after_chars": len(json.dumps(compact, ensure_ascii=False))})
-    return {"reference_date": reference.isoformat(), "evaluation": "offline BM25 source coverage; annotated query is a manual oracle, not model intent; not answer accuracy", "top_k": top_k, "fingerprint": backend.index.fingerprint, "modes": {m: {"cases": sum(r["mode"] == m for r in rows), "all_required": sum(r["mode"] == m and r["all_required"] for r in rows), "passed": sum(r["mode"] == m and r["passed"] for r in rows)} for m in {r["mode"] for r in rows}}, "cases": rows}
+    return {"reference_date": reference.isoformat(), "evaluation": "offline BM25 source coverage; annotated query is a manual oracle, not model intent; not answer accuracy", "bundle": bundle, "top_k": top_k, "fingerprint": backend.index.fingerprint, "modes": {m: {"cases": sum(r["mode"] == m for r in rows), "all_required": sum(r["mode"] == m and r["all_required"] for r in rows), "passed": sum(r["mode"] == m and r["passed"] for r in rows)} for m in {r["mode"] for r in rows}}, "cases": rows}
 
 
 def main():
@@ -65,8 +72,9 @@ def main():
     parser.add_argument("--data-dir", type=Path, default=ROOT / "data")
     parser.add_argument("--cases", type=Path, default=ROOT / "evals/retrieval_cases.json")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--bundle", action="store_true", help="Проверять комплектование, используемое движком")
     args = parser.parse_args()
-    result = asyncio.run(audit(args.data_dir, json.loads(args.cases.read_text())))
+    result = asyncio.run(audit(args.data_dir, json.loads(args.cases.read_text()), bundle=args.bundle))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(result["modes"], ensure_ascii=False))

@@ -14,7 +14,7 @@ web = ["fastapi==0.143.2", "uvicorn==0.54.0", "starlette==1.10.0"]
 test = ["pytest==9.2.0", "pytest-asyncio==1.4.1.post1", "fastapi==0.143.2", "uvicorn==0.54.0", "starlette==1.10.0"]
 
 [tool.setuptools]
-py-modules = ["schemas", "llm_client", "assistant", "solution", "search_adapter", "documents", "retrieval", "temporal", "diagnostics"]
+py-modules = ["schemas", "llm_client", "assistant", "solution", "search_adapter", "documents", "structural_chunking", "retrieval", "temporal", "diagnostics"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

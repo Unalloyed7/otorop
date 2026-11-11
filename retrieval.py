@@ -23,7 +23,7 @@ from typing import Any, Sequence
 from documents import PROCESSOR_VERSION, load_documents, split_document
 from llm_client import LLMClient, ModelAPIError, ModelProtocolError, Settings
 
-RETRIEVAL_VERSION = "retrieval-v5"
+RETRIEVAL_VERSION = "retrieval-v6"
 EMBEDDING_CACHE_VERSION = 2
 EMBEDDING_RETRY_BASE_SECONDS = 30.0
 EMBEDDING_RETRY_MAX_SECONDS = 300.0
@@ -294,6 +294,15 @@ class SearchIndex:
                 return None
             return re.sub(r"^статья\s+", "", str(value), flags=re.IGNORECASE).rstrip(".")
 
+        def provision_targets(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            # Several pieces of one long clause are one reference target, not
+            # competing provisions. Structural completion retrieves the rest.
+            unique = {}
+            for candidate in sorted(candidates, key=lambda c: c["start_char"]):
+                key = (candidate["document_id"], candidate.get("provision_id", candidate["chunk_id"]))
+                unique.setdefault(key, candidate)
+            return list(unique.values())
+
         def add_relation(
             relation_type: str,
             from_chunk: dict[str, Any],
@@ -526,6 +535,7 @@ class SearchIndex:
                         for candidate in chunks_by_document[linked_id]
                         if section_key(candidate.get("section_reference")) == section_key(explicit_reference)
                     ]
+                    targets = provision_targets(targets)
                     if len(targets) == 1:
                         add_relation(
                             "establishes_exception" if condition_kind == "exception" else "references_provision",
@@ -592,6 +602,7 @@ class SearchIndex:
                     for candidate in chunks_by_document[linked_id]
                     if section_key(candidate.get("section_reference")) == section_key(reference)
                 ]
+                referenced_targets = provision_targets(referenced_targets)
                 if len(referenced_targets) == 1:
                     target = referenced_targets[0]
                     if target["chunk_id"] != source["chunk_id"]:
@@ -1102,9 +1113,10 @@ class SchemaSearchBackend:
 
     def _embedding_inputs(self) -> dict[str, str]:
         return {
-            chunk["chunk_id"]: (
-                f"{chunk['title']}\n{chunk.get('section_reference') or ''}\n{chunk['text']}"
-            )
+            chunk["chunk_id"]: "\n".join(dict.fromkeys(
+                value for value in (chunk["title"], *chunk.get("heading_path", []),
+                                    chunk.get("section_reference"), chunk["text"]) if value
+            ))
             for chunk in self.index.chunks
         }
 
@@ -1235,7 +1247,7 @@ class SchemaSearchBackend:
     ) -> Any:
         if mode not in {"bm25", "semantic", "hybrid"}:
             raise ValueError(f"Неизвестный режим поиска: {mode!r}")
-        from schemas import Applicability, Coordinates, Evidence, SearchResult
+        from schemas import SearchResult
 
         filter_values = (
             filters.model_dump(mode="json", exclude_none=True)
@@ -1331,6 +1343,11 @@ class SchemaSearchBackend:
         elif self.client is not None and self.client.settings.reranker_model and apply_reranker:
             self.reranker_status = "ready_not_needed"
 
+        return SearchResult(evidence=self._as_evidence(evidence_items), candidates=candidates)
+
+    def _as_evidence(self, evidence_items):
+        from schemas import Applicability, Coordinates, Evidence
+
         converted = []
         for item in evidence_items:
             document = self.index.get_document(item["document_id"])
@@ -1378,6 +1395,15 @@ class SchemaSearchBackend:
                     "date_sources",
                     "provision_date_sources",
                     "renewal",
+                    "heading_path",
+                    "chunk_role",
+                    "provision_id",
+                    "provision_start_char",
+                    "provision_end_char",
+                    "provision_chunk_ids",
+                    "ancestor_chunk_ids",
+                    "part_index",
+                    "part_count",
                     "local_conditions",
                     "provision_relations",
                     "provision_gaps",
@@ -1416,7 +1442,25 @@ class SchemaSearchBackend:
                 counterparty=item.get("counterparty"),
                 metadata=metadata,
             ))
-        return SearchResult(evidence=converted, candidates=candidates)
+        return converted
+
+    def bundle_result(self, bundle: dict[str, Any]) -> Any:
+        """Adapt dependency-closed evidence without changing the public schema."""
+        from schemas import SearchResult
+
+        evidence = self._as_evidence(bundle["evidence"])
+        groups = bundle["groups"]
+        for item in evidence:
+            item.metadata["bundle_parts"] = [group["part"] for group in groups
+                                              if item.chunk_id in group["evidence_chunk_ids"]]
+            item.metadata["bundle_truncated"] = bundle["truncated"]
+        missing = list(bundle["missing_parts"])
+        if bundle["truncated"]:
+            missing.append("Часть связанных оснований не поместилась в бюджет контекста; полный комплект не проверен")
+        clarifications = list(dict.fromkeys(g["clarification"] for g in groups if g.get("clarification")))
+        candidates = list(dict.fromkeys(p for g in groups for p in g.get("candidates", [])))
+        return SearchResult(evidence=evidence, missing_info=missing,
+                            clarification="; ".join(clarifications) or None, candidates=candidates)
 
     async def search_bundle(
         self,
@@ -1425,6 +1469,9 @@ class SchemaSearchBackend:
         *,
         top_k: int | None = None,
         max_context_chars: int = 12000,
+        max_context_chunks: int | None = None,
+        query_context: str | None = None,
+        existing_chunk_ids: Sequence[str] = (),
         mode: str | None = None,
     ) -> dict[str, Any]:
         """Search question parts and return dependency-closed, provenance-safe groups."""
@@ -1433,6 +1480,8 @@ class SchemaSearchBackend:
             raise ValueError("Для комплектования оснований нужна хотя бы одна часть вопроса.")
         if max_context_chars < 1:
             raise ValueError("max_context_chars должен быть положительным.")
+        if max_context_chunks is not None and max_context_chunks < 1:
+            raise ValueError("max_context_chunks должен быть положительным.")
         result_limit = self.top_k if top_k is None else top_k
         if result_limit < 1:
             raise ValueError("top_k должен быть не меньше 1.")
@@ -1457,19 +1506,20 @@ class SchemaSearchBackend:
             "notice": filter_values.get("as_of") or filter_values.get("event_date"),
         }
         for part in normalized_parts:
+            search_query = part if not query_context or part == query_context else part + "\n" + query_context
             if part not in direct_results:
                 if mode is None:
-                    direct_results[part] = await self.search(part, filters)
+                    direct_results[part] = await self.search(search_query, filters)
                 else:
                     direct_results[part] = await self.search_with_mode(
-                        part,
+                        search_query,
                         filters,
                         mode,
                         top_k=result_limit,
                     )
             result = direct_results[part]
             direct_items = []
-            for evidence in result.evidence:
+            for evidence in result.evidence[:result_limit]:
                 item = self.index.get_chunk(evidence.chunk_id)
                 item["score"] = evidence.metadata.get("score", 0.0)
                 scores_by_chunk[evidence.chunk_id] = float(item["score"] or 0.0)
@@ -1482,6 +1532,7 @@ class SchemaSearchBackend:
             direct_by_group.append(direct_items)
             group_sources.append({
                 "part": part,
+                "query": search_query,
                 "direct_chunk_ids": [item["chunk_id"] for item in direct_items],
                 "missing": not bool(direct_items),
                 "clarification": result.clarification,
@@ -1501,6 +1552,11 @@ class SchemaSearchBackend:
             for _ in range(3):
                 next_frontier: list[str] = []
                 for chunk_id in frontier:
+                    chunk = self.index.get_chunk(chunk_id)
+                    for related_id in (*chunk.get("provision_chunk_ids", []), *chunk.get("ancestor_chunk_ids", [])):
+                        if related_id not in chunk_ids:
+                            chunk_ids.add(related_id)
+                            next_frontier.append(related_id)
                     for relation in relations_by_chunk.get(chunk_id, []):
                         found_relations[relation["relation_id"]] = relation
                         for related_id in (
@@ -1514,28 +1570,34 @@ class SchemaSearchBackend:
                 frontier = next_frontier
                 if not frontier:
                     break
+            # The graph radius is bounded, but an included legal unit is never
+            # partial: complete all of its pieces and ancestor introductions,
+            # even when the graph reached it at the last hop.
+            frontier = list(chunk_ids)
+            while frontier:
+                chunk = self.index.get_chunk(frontier.pop())
+                for related_id in (*chunk.get("provision_chunk_ids", []), *chunk.get("ancestor_chunk_ids", [])):
+                    if related_id not in chunk_ids:
+                        chunk_ids.add(related_id)
+                        frontier.append(related_id)
             return chunk_ids, found_relations
 
-        admitted_ids: set[str] = set()
+        admitted_ids: set[str] = set(existing_chunk_ids)
+        for chunk_id in admitted_ids:
+            self.index.get_chunk(chunk_id)
         admitted_relations: dict[str, dict[str, Any]] = {}
         omitted_ids: set[str] = set()
         group_records: list[dict[str, Any]] = []
 
-        def interval_cost(chunk_ids: set[str]) -> int:
-            ranges: dict[str, list[tuple[int, int]]] = defaultdict(list)
-            for chunk_id in chunk_ids:
-                chunk = self.index.get_chunk(chunk_id)
-                ranges[chunk["document_id"]].append((chunk["start_char"], chunk["end_char"]))
-            total = 0
-            for intervals in ranges.values():
-                merged: list[list[int]] = []
-                for start, end in sorted(intervals):
-                    if merged and start <= merged[-1][1]:
-                        merged[-1][1] = max(merged[-1][1], end)
-                    else:
-                        merged.append([start, end])
-                total += sum(end - start for start, end in merged)
-            return total
+        def evidence_cost(chunk_ids: set[str]) -> int:
+            # The engine sends individual Evidence rows, including overlap.
+            # Budget those rows, not just their merged unique source ranges.
+            return sum(len(self.index.get_chunk(chunk_id)["text"]) for chunk_id in chunk_ids)
+
+        if evidence_cost(admitted_ids) > max_context_chars or (
+            max_context_chunks is not None and len(admitted_ids) > max_context_chunks
+        ):
+            raise ValueError("Уже переданный контекст превышает бюджет комплекта.")
 
         for group, direct_items in zip(group_sources, direct_by_group):
             ordered_hits = sorted(
@@ -1552,7 +1614,9 @@ class SchemaSearchBackend:
             for hit in ordered_hits:
                 bundle_ids, bundle_relations = dependency_closure(hit["chunk_id"])
                 candidate_ids = admitted_ids | bundle_ids
-                if interval_cost(candidate_ids) > max_context_chars:
+                if evidence_cost(candidate_ids) > max_context_chars or (
+                    max_context_chunks is not None and len(candidate_ids) > max_context_chunks
+                ):
                     group_omitted.update(bundle_ids - admitted_ids)
                     omitted_ids.update(bundle_ids - admitted_ids)
                     continue
@@ -1584,7 +1648,10 @@ class SchemaSearchBackend:
                 payload["score"] = scores_by_chunk[chunk_id]
             return payload
 
-        evidence_payloads = [evidence_payload(chunk_id) for chunk_id in sorted(admitted_ids)]
+        ranked_ids = list(dict.fromkeys(item["chunk_id"] for group in direct_by_group for item in group))
+        ranked_ids.extend(sorted(admitted_ids - set(ranked_ids), key=lambda chunk_id: (
+            self.index.get_chunk(chunk_id)["source_file"], self.index.get_chunk(chunk_id)["start_char"])))
+        evidence_payloads = [evidence_payload(chunk_id) for chunk_id in ranked_ids if chunk_id in admitted_ids]
         context_by_document: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for chunk_id in admitted_ids:
             context_by_document[self.index.get_chunk(chunk_id)["document_id"]].append(
@@ -1624,7 +1691,9 @@ class SchemaSearchBackend:
             "missing_parts": [group["part"] for group in group_records if group["missing"]],
             "context_spans": context_spans,
             "context_chars": sum(len(span["text"]) for span in context_spans),
+            "evidence_chars": sum(len(item["text"]) for item in evidence_payloads),
             "max_context_chars": max_context_chars,
+            "max_context_chunks": max_context_chunks,
             "truncated": bool(omitted_ids),
             "omitted_chunk_ids": sorted(omitted_ids),
         }

@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from xml.etree import ElementTree as ET
 
-PROCESSOR_VERSION = "documents-v5"
+PROCESSOR_VERSION = "documents-v6"
 SUPPORTED_SUFFIXES = {".txt", ".md", ".docx"}
 
 _CONTRACT_RE = re.compile(
@@ -26,10 +26,6 @@ _NUMERIC_DATE_RE = re.compile(r"(?<!\d)(\d{1,2})[./](\d{1,2})[./](\d{4})(?!\d)")
 _WORD_DATE_RE = re.compile(
     r"\b(\d{1,2})\s+(января|февраля|марта|апреля|мая|июня|июля|августа|"
     r"сентября|октября|ноября|декабря)\s+(\d{4})\b",
-    re.IGNORECASE,
-)
-_NUMBERED_LINE_RE = re.compile(
-    r"^\s*(?:(Статья)\s+)?(\d+(?:\.\d+){0,5})(?:[.)])?(?=\s|$)\s*(.*)$",
     re.IGNORECASE,
 )
 _INLINE_REFERENCE_RE = re.compile(
@@ -523,184 +519,12 @@ def load_documents(kb_path: str | Path) -> list[dict[str, Any]]:
     return documents
 
 
-def _split_long_range(text: str, start: int, end: int, max_chars: int, overlap: int) -> list[tuple[int, int]]:
-    ranges: list[tuple[int, int]] = []
-    cursor = start
-    while end - cursor > max_chars:
-        limit = cursor + max_chars
-        lower = cursor + max_chars * 2 // 3
-        boundary = max(text.rfind("\n", lower, limit), text.rfind(" ", lower, limit), text.rfind(". ", lower, limit))
-        if boundary <= cursor:
-            boundary = limit
-        piece_end = boundary + (1 if text[boundary:boundary + 1] == "." else 0)
-        ranges.append((cursor, piece_end))
-        cursor = max(cursor + 1, piece_end - overlap)
-        while cursor < end and text[cursor].isspace():
-            cursor += 1
-    if cursor < end:
-        ranges.append((cursor, end))
-    return ranges
-
-
-def split_document(
-    document: dict[str, Any],
-    max_chars: int = 1800,
-    overlap: int = 180,
-) -> list[dict[str, Any]]:
-    """Split text by numbered legal provisions and paragraphs without changing offsets."""
-    if max_chars < 200 or overlap < 0 or overlap >= max_chars:
-        raise ValueError("Ожидаются max_chars >= 200 и 0 <= overlap < max_chars.")
-    text = document["text"]
-    lines: list[tuple[int, int]] = []
-    offset = 0
-    for line in text.splitlines(keepends=True):
-        line_end = offset + len(line)
-        start = offset
-        end = line_end
-        while start < end and text[start].isspace():
-            start += 1
-        while end > start and text[end - 1].isspace():
-            end -= 1
-        if start < end:
-            lines.append((start, end))
-        offset = line_end
-    if offset < len(text):
-        start = offset
-        end = len(text)
-        while start < end and text[start].isspace():
-            start += 1
-        while end > start and text[end - 1].isspace():
-            end -= 1
-        if start < end:
-            lines.append((start, end))
-
-    chunks: list[dict[str, Any]] = []
-    heading_path: list[str] = []
-    current_locator: str | None = None
-    active_amendment_reference: str | None = None
-    for start, end in lines:
-        line_text = text[start:end]
-        numbered = _NUMBERED_LINE_RE.match(line_text)
-        locator = current_locator
-        referenced_section: str | None = None
-        if numbered:
-            prefix = "Статья " if numbered.group(1) else ""
-            locator = f"{prefix}{numbered.group(2).rstrip('.')}"
-            current_locator = locator
-            depth = numbered.group(2).count(".") + 1
-            if len(heading_path) >= depth:
-                heading_path = heading_path[: depth - 1]
-            rest = numbered.group(3).strip()
-            if not rest or len(rest) < 90:
-                heading_path.append(line_text)
-        else:
-            inline_reference = _INLINE_REFERENCE_RE.search(line_text)
-            if inline_reference:
-                referenced_section = inline_reference.group(1).rstrip(".")
-                if (
-                    document["document_type"] == "amendment"
-                    and re.match(r"^\s*(?:изложить|дополнить|исключить|заменить)\b", line_text, re.IGNORECASE)
-                ):
-                    locator = referenced_section
-                    current_locator = locator
-        if document["document_type"] == "amendment":
-            action = _AMENDMENT_ACTION_RE.search(line_text)
-            if action:
-                active_amendment_reference = action.group(2).rstrip(".")
-                locator = active_amendment_reference
-                current_locator = locator
-            elif active_amendment_reference:
-                is_condition = any(
-                    condition.get("start_char") is not None
-                    and start < condition["end_char"]
-                    and end > condition["start_char"]
-                    for condition in document.get("applicability_conditions", [])
-                )
-                is_replacement = bool(re.match(
-                    r"^\s*[«\"“']?\s*"
-                    + re.escape(active_amendment_reference)
-                    + r"\s*[.)]",
-                    line_text,
-                ))
-                if is_condition or is_replacement:
-                    locator = active_amendment_reference
-                elif numbered:
-                    active_amendment_reference = None
-                else:
-                    locator = None
-                    current_locator = None
-                    active_amendment_reference = None
-        for piece_start, piece_end in _split_long_range(text, start, end, max_chars, overlap):
-            piece_text = text[piece_start:piece_end]
-            chunk_digest = hashlib.sha256(
-                f"{document['document_id']}\0{piece_start}\0{piece_end}\0{piece_text}".encode("utf-8")
-            ).hexdigest()[:24]
-            chunks.append({
-                **{key: value for key, value in document.items() if key != "text"},
-                "chunk_id": chunk_digest,
-                "section_reference": locator,
-                "referenced_section": referenced_section,
-                "heading_path": list(heading_path),
-                "text": piece_text,
-                "start_char": piece_start,
-                "end_char": piece_end,
-            })
-    if not chunks:
-        raise DocumentLoadError(f"Документ {document['source_file']!r} не содержит текста для индексации.")
-    for position, chunk in enumerate(chunks):
-        document_conditions = document.get("applicability_conditions", [])
-        chunk_conditions = [
-            condition for condition in document_conditions
-            if (
-                condition.get("start_char") is not None
-                and chunk["start_char"] <= condition["start_char"]
-                and chunk["end_char"] >= condition["end_char"]
-            )
-        ]
-        for condition in document_conditions:
-            target_reference = condition.get("target_reference")
-            if (
-                target_reference
-                and chunk.get("section_reference") == target_reference
-                and chunk["end_char"] <= condition.get("start_char", -1)
-                and condition not in chunk_conditions
-            ):
-                chunk_conditions.append(condition)
-        if any(
-            chunk["start_char"] == condition.get("start_char")
-            and chunk["end_char"] == condition.get("end_char")
-            for condition in chunk_conditions
-        ):
-            chunk["chunk_role"] = "applicability_condition"
-        chunk["applicability_conditions"] = chunk_conditions
-    for condition in document.get("applicability_conditions", []):
-        if any(
-            chunk["start_char"] <= condition["start_char"]
-            and chunk["end_char"] >= condition["end_char"]
-            for chunk in chunks
-        ):
-            continue
-        start = condition["start_char"]
-        end = condition["end_char"]
-        text_piece = text[start:end]
-        target_reference = condition.get("target_reference")
-        chunk_digest = hashlib.sha256(
-            f"{document['document_id']}\0{start}\0{end}\0{text_piece}".encode("utf-8")
-        ).hexdigest()[:24]
-        chunks.append({
-            **{key: value for key, value in document.items() if key != "text"},
-            "chunk_id": chunk_digest,
-            "section_reference": target_reference,
-            "referenced_section": None,
-            "heading_path": [],
-            "text": text_piece,
-            "start_char": start,
-            "end_char": end,
-            "applicability_conditions": [condition],
-            "chunk_role": "applicability_condition",
-        })
-    chunks.sort(key=lambda item: (item["start_char"], item["end_char"], item["chunk_id"]))
-    for position, chunk in enumerate(chunks):
-        chunk["previous_chunk_id"] = chunks[position - 1]["chunk_id"] if position else None
-        chunk["next_chunk_id"] = chunks[position + 1]["chunk_id"] if position + 1 < len(chunks) else None
-    return chunks
+def split_document(document: dict[str, Any], max_chars: int = 1800, overlap: int = 180) -> list[dict[str, Any]]:
+    """Split complete legal provisions; preserve source coordinates and parents."""
+    from structural_chunking import split_structural_document
+    try:
+        return split_structural_document(document, max_chars=max_chars, overlap=overlap)
+    except ValueError as exc:
+        if not document.get("text", "").strip():
+            raise DocumentLoadError(str(exc)) from exc
+        raise
