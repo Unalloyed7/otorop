@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+import json
 from pathlib import Path
 import zipfile
 
@@ -252,7 +253,7 @@ async def test_embedding_cache_is_reused_and_scoped_by_model(corpus, settings, m
     await first_backend.search("срок оплаты по Т-1/2026", filters)
     assert first_backend.embedding_status == "ready"
     assert len(list(cache_dir.glob("*.json"))) == 1
-    assert len(first_client.embedding_batches[0]) == len(index.chunks)
+    assert sum(map(len, first_client.embedding_batches[:-1])) == len(index.chunks)
 
     second_client = DenseTestClient(settings.model_copy(update={"reranker_model": None}))
     second_backend = SchemaSearchBackend(index, client=second_client)
@@ -279,7 +280,45 @@ async def test_embedding_cache_is_reused_and_scoped_by_model(corpus, settings, m
     changed_backend = SchemaSearchBackend(changed_index, client=changed_client)
     await changed_backend.search("срок оплаты по Т-1/2026", filters)
     assert len(list(cache_dir.glob("*.json"))) == 3
-    assert len(changed_client.embedding_batches[0]) == len(changed_index.chunks)
+    assert sum(map(len, changed_client.embedding_batches[:-1])) == len(changed_index.chunks)
+
+
+async def test_partial_embedding_cache_resumes_after_interrupted_build(corpus, settings, monkeypatch):
+    cache_dir = corpus / "resumable-embedding-cache"
+    monkeypatch.setenv("OTOROP_EMBEDDING_CACHE_DIR", str(cache_dir))
+    with zipfile.ZipFile(corpus / "knowledge-base.zip", "a") as archive:
+        archive.writestr(
+            "документы компании__Много пунктов.txt",
+            "РУКОВОДСТВО\n" + "".join(
+                f"{number}. Положение для проверки пакетного кэша {number}.\n"
+                for number in range(1, 100)
+            ),
+        )
+    index = create_search(corpus).index
+    assert len(index.chunks) > 32
+
+    class InterruptedClient(DenseTestClient):
+        async def embeddings(self, texts):
+            if self.embedding_calls == 1:
+                self.embedding_calls += 1
+                raise ModelAPIError("/embeddings: тестовая отмена после сохранённого пакета")
+            return await super().embeddings(texts)
+
+    interrupted = InterruptedClient(settings.model_copy(update={"reranker_model": None}))
+    with pytest.raises(ModelAPIError):
+        await SchemaSearchBackend(index, client=interrupted)._ensure_document_vectors()
+    cache_files = list(cache_dir.glob("*.json"))
+    assert len(cache_files) == 1
+    payload = json.loads(cache_files[0].read_text(encoding="utf-8"))
+    completed = len(payload["entries"])
+    assert 0 < completed < len(index.chunks)
+
+    resumed = DenseTestClient(settings.model_copy(update={"reranker_model": None}))
+    backend = SchemaSearchBackend(index, client=resumed)
+    vectors = await backend._ensure_document_vectors()
+    assert backend.embedding_status == "ready"
+    assert len(vectors) == len(index.chunks)
+    assert sum(map(len, resumed.embedding_batches)) == len(index.chunks) - completed
 
 
 async def test_reranker_failure_preserves_hybrid_results(corpus, settings):
@@ -390,14 +429,32 @@ async def test_condition_result_is_preserved_for_generator(corpus, local_setting
     filters = SearchFilters(contract_number="Т-1/2026", event_date=day, date_kind="specification_signed" if day else None)
     result = await backend.search("новый адрес доставки Т-1/2026", filters)
     amendments = [e for e in result.evidence if e.metadata.get("amendment_number") == 1]
-    assert amendments
-    assert {e.metadata["applicability_status"] for e in amendments} == {status}
-    assert all(e.applicability.conditions for e in amendments)
-    client = FakeClient(local_settings, intent(filters=filters), {"status": "clarify", "claims": [], "missing_info": ["Обстоятельства применения адреса"]})
+    scoped_amendments = [e for e in amendments if e.metadata.get("applicability_conditions")]
+    assert scoped_amendments
+    assert {e.metadata["applicability_status"] for e in scoped_amendments} == {status}
+    assert all(e.applicability.conditions for e in scoped_amendments)
+    client = FakeClient(
+        local_settings,
+        intent(filters=filters).model_copy(update={
+            "query": "новый адрес доставки Т-1/2026",
+            "parts": ["Адрес доставки"],
+        }),
+        {"status": "clarify", "claims": [], "missing_info": ["Обстоятельства применения адреса"]},
+    )
     answer = await LegalAssistant(backend, client).answer("Какой адрес доставки?")
     assert answer.status == "clarify"
-    sent = [e for e in client.requests[1][1]["evidence"] if e["metadata"].get("amendment_number") == 1]
+    sent = [
+        evidence for evidence in client.requests[1][1]["evidence"]
+        if evidence["metadata"].get("amendment_number") == 1
+        and evidence["metadata"].get("applicability_conditions")
+    ]
+    assert sent
     assert {e["metadata"]["applicability_status"] for e in sent} == {status}
+    assert all(e["applicability"]["conditions"] for e in sent)
+    assert all(
+        any("1 октября 2026" in condition for condition in e["applicability"]["conditions"])
+        for e in sent
+    )
 
 
 async def test_real_retrieval_and_engine_write_same_csv(corpus, local_settings):
