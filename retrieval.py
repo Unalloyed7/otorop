@@ -18,13 +18,13 @@ import tracemalloc
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from documents import PROCESSOR_VERSION, load_documents, split_document
 from llm_client import LLMClient, ModelAPIError, ModelProtocolError, Settings
 
-RETRIEVAL_VERSION = "retrieval-v4"
-EMBEDDING_CACHE_VERSION = 1
+RETRIEVAL_VERSION = "retrieval-v5"
+EMBEDDING_CACHE_VERSION = 2
 EMBEDDING_RETRY_BASE_SECONDS = 30.0
 EMBEDDING_RETRY_MAX_SECONDS = 300.0
 logger = logging.getLogger(__name__)
@@ -130,8 +130,10 @@ def _date(value: Any) -> str | None:
         raise ValueError(f"Некорректная календарная дата: {value!r}") from exc
 
 
-def _evaluate_condition(condition: dict[str, str], specification_signed_at: str | None) -> str:
+def _evaluate_condition(condition: dict[str, Any], specification_signed_at: str | None) -> str:
     if not specification_signed_at:
+        return "unknown"
+    if condition.get("operator") == "when_absent" or not condition.get("date"):
         return "unknown"
     date = condition["date"]
     operator = condition["operator"]
@@ -139,6 +141,8 @@ def _evaluate_condition(condition: dict[str, str], specification_signed_at: str 
         return "applicable" if specification_signed_at > date else "not_applicable"
     if operator == "before":
         return "applicable" if specification_signed_at < date else "not_applicable"
+    if operator == "on_or_before":
+        return "applicable" if specification_signed_at <= date else "not_applicable"
     if operator == "on_or_after":
         return "applicable" if specification_signed_at >= date else "not_applicable"
     return "unknown"
@@ -147,14 +151,27 @@ def _evaluate_condition(condition: dict[str, str], specification_signed_at: str 
 def evaluate_applicability(
     evidence: dict[str, Any],
     specification_signed_at: str | None = None,
+    event_dates: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     """Evaluate explicit conditions without inferring missing dates or terms."""
     conditions = evidence.get("applicability_conditions") or []
     if not conditions:
         return {"status": "not_specified", "conditions": []}
     date = _date(specification_signed_at)
+    normalized_event_dates = {
+        kind: _date(value)
+        for kind, value in (event_dates or {}).items()
+        if value is not None
+    }
     results = [
-        {**condition, "status": _evaluate_condition(condition, date)}
+        {
+            **condition,
+            "status": _evaluate_condition(
+                condition,
+                date if condition.get("kind") == "specification_signed_at"
+                else normalized_event_dates.get(condition.get("kind")),
+            ),
+        }
         for condition in conditions
     ]
     statuses = {result["status"] for result in results}
@@ -184,6 +201,7 @@ class SearchIndex:
             for position, chunk in enumerate(self.chunks)
         }
         self._link_documents()
+        self._link_provisions()
         self._build_bm25()
         manifest = [
             (doc["source_file"], doc["content_sha256"])
@@ -254,6 +272,363 @@ class SearchIndex:
             document = self.documents[chunk["document_id"]]
             chunk["related_document_ids"] = list(document["related_document_ids"])
             chunk["linked_document_ids"] = list(document["linked_document_ids"])
+
+    def _link_provisions(self) -> None:
+        action_pattern = re.compile(
+            r"\b(изложить|дополнить|исключить|заменить)\s+"
+            r"(?:пункт(?:а|е)?|п\.|статью|статьи)\s*(\d+(?:\.\d+){0,5})",
+            re.IGNORECASE,
+        )
+        condition_pattern = re.compile(
+            r"\b(?:за\s+исключением|исключая|кроме|если\s+иное|"
+            r"при\s+условии|при\s+отсутствии|не\s+применяется)\b",
+            re.IGNORECASE,
+        )
+        exception_pattern = re.compile(
+            r"\b(?:за\s+исключением|исключая|кроме|не\s+применяется|исключение)\b",
+            re.IGNORECASE,
+        )
+
+        def section_key(value: Any) -> str | None:
+            if not value:
+                return None
+            return re.sub(r"^статья\s+", "", str(value), flags=re.IGNORECASE).rstrip(".")
+
+        def add_relation(
+            relation_type: str,
+            from_chunk: dict[str, Any],
+            to_chunk: dict[str, Any],
+            quote_chunk: dict[str, Any],
+            *,
+            confidence: str,
+            target_reference: str | None = None,
+        ) -> dict[str, Any]:
+            quote = quote_chunk["text"]
+            identity = "\0".join((
+                relation_type,
+                from_chunk["chunk_id"],
+                to_chunk["chunk_id"],
+                quote_chunk["chunk_id"],
+                confidence,
+            ))
+            relation = {
+                "relation_id": hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24],
+                "type": relation_type,
+                "from_chunk_id": from_chunk["chunk_id"],
+                "to_chunk_id": to_chunk["chunk_id"],
+                "from_document_id": from_chunk["document_id"],
+                "to_document_id": to_chunk["document_id"],
+                "target_reference": target_reference,
+                "confidence": confidence,
+                "quote": quote,
+                "supporting_chunk_ids": [quote_chunk["chunk_id"]],
+            }
+            if not any(existing["relation_id"] == relation["relation_id"] for existing in self.provision_relations):
+                self.provision_relations.append(relation)
+                from_chunk["provision_relations"].append(relation)
+                if to_chunk["chunk_id"] != from_chunk["chunk_id"]:
+                    to_chunk["provision_relations"].append(relation)
+                quote_chunk["provision_relations"].append(relation)
+            return relation
+
+        self.provision_relations: list[dict[str, Any]] = []
+        self.provision_gaps: list[dict[str, Any]] = []
+        for chunk in self.chunks:
+            chunk["provision_relations"] = []
+            chunk["provision_gaps"] = []
+            chunk["local_conditions"] = []
+
+        chunks_by_document: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for chunk in self.chunks:
+            chunks_by_document[chunk["document_id"]].append(chunk)
+        for entries in chunks_by_document.values():
+            entries.sort(key=lambda item: (item["start_char"], item["end_char"], item["chunk_id"]))
+
+        for document in self.documents.values():
+            if document.get("document_type") != "amendment":
+                continue
+            source_chunks = chunks_by_document[document["document_id"]]
+            contract_number = document.get("source_contract_number") or document.get("contract_number")
+            for position, instruction in enumerate(source_chunks):
+                action = action_pattern.search(instruction["text"])
+                if not action:
+                    continue
+                verb = action.group(1).casefold()
+                target_reference = action.group(2).rstrip(".")
+                target_documents = [
+                    candidate for candidate in self.documents.values()
+                    if candidate.get("document_type") == "agreement"
+                    and contract_number
+                    and candidate.get("contract_number") == contract_number
+                ]
+                targets = [
+                    candidate
+                    for target_document in target_documents
+                    for candidate in chunks_by_document[target_document["document_id"]]
+                    if section_key(candidate.get("section_reference")) == target_reference
+                ]
+                if not targets:
+                    gap = {
+                        "kind": "referenced_provision_not_found",
+                        "source_chunk_id": instruction["chunk_id"],
+                        "target_reference": target_reference,
+                        "contract_number": contract_number,
+                        "source_text": instruction["text"],
+                        "message": f"В базе не найден изменяемый пункт {target_reference} договора.",
+                    }
+                    self.provision_gaps.append(gap)
+                    instruction["provision_gaps"].append(gap)
+                    continue
+                replacement = next(
+                    (
+                        candidate for candidate in source_chunks[position + 1:]
+                        if section_key(candidate.get("section_reference")) == target_reference
+                        and not action_pattern.search(candidate["text"])
+                        and candidate.get("chunk_role") != "applicability_condition"
+                        and not re.search(
+                            r"^\s*(?:остальн\w+\s+услови|настояще[её]\s+дополнительное\s+соглашение|поставщик:|покупатель:)",
+                            candidate["text"],
+                            re.IGNORECASE,
+                        )
+                    ),
+                    instruction,
+                )
+                relation_type = {
+                    "изложить": "changes_provision",
+                    "дополнить": "supplements_provision",
+                    "исключить": "removes_provision",
+                    "заменить": "replaces_provision",
+                }[verb]
+                for target in targets:
+                    add_relation(
+                        relation_type,
+                        target,
+                        replacement,
+                        instruction,
+                        confidence="explicit",
+                        target_reference=target_reference,
+                    )
+
+        for document in self.documents.values():
+            for source in chunks_by_document[document["document_id"]]:
+                condition_records = source.get("applicability_conditions") or []
+                if source.get("chunk_role") == "applicability_condition":
+                    condition_records = [
+                        condition for condition in condition_records
+                        if condition.get("source_text") == source["text"]
+                    ]
+                for condition in condition_records:
+                    target_reference = condition.get("target_reference")
+                    if not target_reference:
+                        continue
+                    modified = [
+                        relation for relation in self.provision_relations
+                        if relation["type"] in {
+                            "changes_provision", "supplements_provision", "replaces_provision"
+                        }
+                        and relation["to_document_id"] == document["document_id"]
+                        and relation.get("target_reference") == target_reference
+                    ]
+                    condition_chunk = next(
+                        (
+                            candidate for candidate in chunks_by_document[document["document_id"]]
+                            if condition.get("start_char") == candidate["start_char"]
+                            and condition.get("end_char") == candidate["end_char"]
+                        ),
+                        source,
+                    )
+                    for change in modified:
+                        changed_chunk = self._by_chunk_id[change["to_chunk_id"]]
+                        add_relation(
+                            "defines_applicability",
+                            changed_chunk,
+                            condition_chunk,
+                            condition_chunk,
+                            confidence="explicit",
+                            target_reference=target_reference,
+                        )
+
+        policy_documents = [
+            document for document in self.documents.values()
+            if document.get("document_type") == "internal_policy"
+        ]
+        for older in policy_documents:
+            for newer in policy_documents:
+                if (
+                    older["document_id"] == newer["document_id"]
+                    or _normalize(older["title"]) != _normalize(newer["title"])
+                    or not older.get("edition")
+                    or not newer.get("edition")
+                    or older["edition"] >= newer["edition"]
+                ):
+                    continue
+                old_date = date.fromisoformat(older["edition"]).strftime("%d.%m.%Y")
+                explicit_quote = next(
+                    (
+                        chunk for chunk in chunks_by_document[newer["document_id"]]
+                        if re.search(
+                            r"редакци[яи]\s+от\s+" + re.escape(old_date)
+                            + r".{0,80}(?:утрат|утрач)\w*\s+силу",
+                            chunk["text"],
+                            re.IGNORECASE,
+                        )
+                    ),
+                    None,
+                )
+                if explicit_quote is None:
+                    continue
+                old_sections: dict[str, dict[str, Any]] = {}
+                new_sections: dict[str, dict[str, Any]] = {}
+                for chunk in chunks_by_document[older["document_id"]]:
+                    reference = section_key(chunk.get("section_reference"))
+                    if reference:
+                        old_sections.setdefault(reference, chunk)
+                for chunk in chunks_by_document[newer["document_id"]]:
+                    reference = section_key(chunk.get("section_reference"))
+                    if reference:
+                        new_sections.setdefault(reference, chunk)
+                for reference in sorted(old_sections.keys() & new_sections.keys()):
+                    add_relation(
+                        "supersedes_edition",
+                        old_sections[reference],
+                        new_sections[reference],
+                        explicit_quote,
+                        confidence="explicit",
+                        target_reference=reference,
+                    )
+
+        for document in self.documents.values():
+            for source in chunks_by_document[document["document_id"]]:
+                marker = condition_pattern.search(source["text"])
+                if not marker:
+                    continue
+                is_exception = bool(exception_pattern.search(source["text"]))
+                condition_kind = (
+                    "exception" if is_exception
+                    else "condition"
+                )
+                source["local_conditions"].append({
+                    "kind": condition_kind,
+                    "scope": "provision",
+                    "applies_to_section": source.get("section_reference"),
+                    "confidence": "explicit",
+                    "source_chunk_id": source["chunk_id"],
+                    "quote": source["text"],
+                    "unknowns": [],
+                })
+                explicit_reference = source.get("referenced_section")
+                if explicit_reference:
+                    linked_documents = set(document.get("linked_document_ids", []))
+                    linked_documents.add(document["document_id"])
+                    targets = [
+                        candidate
+                        for linked_id in linked_documents
+                        for candidate in chunks_by_document[linked_id]
+                        if section_key(candidate.get("section_reference")) == section_key(explicit_reference)
+                    ]
+                    if len(targets) == 1:
+                        add_relation(
+                            "establishes_exception" if condition_kind == "exception" else "references_provision",
+                            targets[0],
+                            source,
+                            source,
+                            confidence="explicit",
+                            target_reference=str(explicit_reference),
+                        )
+                        continue
+                current_section = section_key(source.get("section_reference"))
+                if is_exception and current_section and "." in current_section:
+                    parent = current_section.rsplit(".", 1)[0]
+                    preceding = [
+                        candidate for candidate in chunks_by_document[document["document_id"]]
+                        if candidate["start_char"] < source["start_char"]
+                        and (section_key(candidate.get("section_reference")) or "").startswith(parent + ".")
+                        and section_key(candidate.get("section_reference")) != current_section
+                    ]
+                    if preceding:
+                        nearest = preceding[-1]
+                        add_relation(
+                            "possible_exception_to",
+                            nearest,
+                            source,
+                            source,
+                            confidence="inferred",
+                            target_reference=current_section,
+                        )
+
+        for document in self.documents.values():
+            linked_document_ids = set(document.get("linked_document_ids", []))
+            for source in chunks_by_document[document["document_id"]]:
+                reference = source.get("referenced_section")
+                if not reference or source.get("document_type") == "amendment":
+                    continue
+                if (
+                    source.get("document_type") == "law"
+                    and re.match(r"^\s*(?:источник|заголовок)\s*:", source["text"], re.IGNORECASE)
+                ):
+                    continue
+                reference_text = source["text"]
+                law_aliases = (
+                    (r"\b(?:трудового\s+кодекса|тк\s*рф)\b", r"(?:тк|трудов)"),
+                    (r"\b(?:налогового\s+кодекса|нк\s*рф)\b", r"(?:нк|налогов)"),
+                    (r"\bкоап\b", r"коап"),
+                    (r"\b(?:152[\s-]*фз|персональных\s+данных)\b", r"(?:152фз|152-фз)"),
+                )
+                target_document_ids = linked_document_ids | {document["document_id"]}
+                for alias_pattern, filename_pattern in law_aliases:
+                    if re.search(alias_pattern, reference_text, re.IGNORECASE):
+                        target_document_ids.update(
+                            target_id for target_id, target_document in self.documents.items()
+                            if target_document.get("document_type") == "law"
+                            and re.search(
+                                filename_pattern,
+                                target_document.get("source_file", ""),
+                                re.IGNORECASE,
+                            )
+                        )
+                referenced_targets = [
+                    candidate
+                    for linked_id in target_document_ids
+                    for candidate in chunks_by_document[linked_id]
+                    if section_key(candidate.get("section_reference")) == section_key(reference)
+                ]
+                if len(referenced_targets) == 1:
+                    target = referenced_targets[0]
+                    if target["chunk_id"] != source["chunk_id"]:
+                        quote_type = (
+                            "supplements_procedure"
+                            if re.search(r"\bдополнени[ея]\b", source["text"], re.IGNORECASE)
+                            else "references_provision"
+                        )
+                        add_relation(
+                            quote_type,
+                            source,
+                            target,
+                            source,
+                            confidence="explicit",
+                            target_reference=str(reference),
+                        )
+                elif len(referenced_targets) != 0:
+                    gap = {
+                        "kind": "referenced_provision_ambiguous",
+                        "source_chunk_id": source["chunk_id"],
+                        "target_reference": str(reference),
+                        "candidate_chunk_ids": [candidate["chunk_id"] for candidate in referenced_targets],
+                        "source_text": source["text"],
+                        "message": f"Ссылка на пункт {reference} неоднозначна между положениями базы.",
+                    }
+                    source["provision_gaps"].append(gap)
+                    self.provision_gaps.append(gap)
+                else:
+                    gap = {
+                        "kind": "referenced_provision_not_found",
+                        "source_chunk_id": source["chunk_id"],
+                        "target_reference": str(reference),
+                        "source_text": source["text"],
+                        "message": f"Ссылка на пункт {reference} есть в источнике, но цель не найдена в связанной части базы.",
+                    }
+                    source["provision_gaps"].append(gap)
+                    self.provision_gaps.append(gap)
 
     def _build_bm25(self) -> None:
         self._term_frequencies: list[Counter[str]] = []
@@ -399,7 +774,26 @@ class SearchIndex:
                 continue
             if snapshot_date and document.get("snapshot_date") != snapshot_date:
                 continue
-            applicability = evaluate_applicability(chunk, spec_date)
+            applicability = evaluate_applicability(
+                chunk,
+                spec_date,
+                {
+                    "contract_signed_at": signed_date,
+                    "event": as_of,
+                    "delivery": as_of,
+                    "notice": as_of,
+                },
+            )
+            if only_applicable and document.get("document_type") == "amendment":
+                scoped_conditions = [
+                    condition for condition in document.get("applicability_conditions", [])
+                    if condition.get("target_reference")
+                ]
+                if scoped_conditions and not any(
+                    condition.get("target_reference") == chunk.get("section_reference")
+                    for condition in chunk.get("applicability_conditions", [])
+                ):
+                    continue
             if only_applicable and applicability["status"] == "not_applicable":
                 continue
 
@@ -563,7 +957,16 @@ class SearchIndex:
         for score, position in scored[:top_k]:
             evidence = dict(self.chunks[position])
             evidence["score"] = round(score, 6)
-            evidence["applicability"] = evaluate_applicability(evidence, spec_date)
+            evidence["applicability"] = evaluate_applicability(
+                evidence,
+                spec_date,
+                {
+                    "contract_signed_at": signed_date,
+                    "event": as_of,
+                    "delivery": as_of,
+                    "notice": as_of,
+                },
+            )
             evidence["retrieval_reason"] = ranking
             results.append(evidence)
         if top_k > 1 and results:
@@ -597,7 +1000,16 @@ class SearchIndex:
             for position, score in context.items():
                 evidence = dict(self.chunks[position])
                 evidence["score"] = round(score, 6)
-                evidence["applicability"] = evaluate_applicability(evidence, spec_date)
+                evidence["applicability"] = evaluate_applicability(
+                    evidence,
+                    spec_date,
+                    {
+                        "contract_signed_at": signed_date,
+                        "event": as_of,
+                        "delivery": as_of,
+                        "notice": as_of,
+                    },
+                )
                 evidence["retrieval_reason"] = "sibling_context"
                 results.append(evidence)
             results.sort(key=lambda item: (-item["score"], item["source_file"], item["start_char"]))
@@ -688,7 +1100,15 @@ class SchemaSearchBackend:
             self._embedding_cache_file = Path(cache_root) / f"{cache_name}.json"
         return self._embedding_cache_file
 
-    def _load_cached_vectors(self) -> dict[str, list[float]] | None:
+    def _embedding_inputs(self) -> dict[str, str]:
+        return {
+            chunk["chunk_id"]: (
+                f"{chunk['title']}\n{chunk.get('section_reference') or ''}\n{chunk['text']}"
+            )
+            for chunk in self.index.chunks
+        }
+
+    def _load_cached_vectors(self, inputs: dict[str, str]) -> dict[str, list[float]] | None:
         cache_path = self._cache_path()
         try:
             with cache_path.open(encoding="utf-8") as stream:
@@ -701,24 +1121,38 @@ class SchemaSearchBackend:
                 or payload.get("base_url") != self.client.settings.base_url
             ):
                 raise ValueError("метаданные кэша не совпадают с индексом или моделью")
-            raw_vectors = payload.get("vectors")
-            expected_ids = {chunk["chunk_id"] for chunk in self.index.chunks}
-            if not isinstance(raw_vectors, dict) or set(raw_vectors) != expected_ids:
-                raise ValueError("набор фрагментов в кэше не совпадает с индексом")
+            entries = payload.get("entries")
+            if not isinstance(entries, dict):
+                raise ValueError("в кэше нет таблицы векторов")
             vectors: dict[str, list[float]] = {}
             dimension: int | None = None
-            for chunk_id, raw_vector in raw_vectors.items():
+            invalid_entries = 0
+            for chunk_id, entry in entries.items():
+                if chunk_id not in inputs or not isinstance(entry, dict):
+                    invalid_entries += 1
+                    continue
+                expected_hash = hashlib.sha256(inputs[chunk_id].encode("utf-8")).hexdigest()
+                if entry.get("input_sha256") != expected_hash:
+                    invalid_entries += 1
+                    continue
+                raw_vector = entry.get("vector")
                 if (
                     not isinstance(raw_vector, list)
                     or not raw_vector
                     or any(type(value) not in (int, float) or not math.isfinite(value) for value in raw_vector)
                 ):
-                    raise ValueError("в кэше найден некорректный вектор")
+                    invalid_entries += 1
+                    continue
                 if dimension is None:
                     dimension = len(raw_vector)
                 elif len(raw_vector) != dimension:
-                    raise ValueError("размерности векторов в кэше различаются")
+                    invalid_entries += 1
+                    continue
                 vectors[chunk_id] = [float(value) for value in raw_vector]
+            if invalid_entries:
+                diagnostic = f"пропущено повреждённых или устаревших векторов в кэше: {invalid_entries}"
+                self.diagnostics.append(diagnostic)
+                logger.warning("retrieval: %s", diagnostic)
             return vectors
         except FileNotFoundError:
             return None
@@ -728,7 +1162,11 @@ class SchemaSearchBackend:
             logger.warning("retrieval: %s", diagnostic)
             return None
 
-    def _save_cached_vectors(self, vectors: dict[str, list[float]]) -> None:
+    def _save_cached_vectors(
+        self,
+        vectors: dict[str, list[float]],
+        inputs: dict[str, str],
+    ) -> None:
         cache_path = self._cache_path()
         temporary_path: Path | None = None
         try:
@@ -748,7 +1186,15 @@ class SchemaSearchBackend:
                         "fingerprint": self.index.fingerprint,
                         "model": self.client.settings.embedding_model,
                         "base_url": self.client.settings.base_url,
-                        "vectors": vectors,
+                        "entries": {
+                            chunk_id: {
+                                "input_sha256": hashlib.sha256(
+                                    inputs[chunk_id].encode("utf-8")
+                                ).hexdigest(),
+                                "vector": vector,
+                            }
+                            for chunk_id, vector in vectors.items()
+                        },
                     },
                     stream,
                     separators=(",", ":"),
@@ -785,6 +1231,7 @@ class SchemaSearchBackend:
         mode: str,
         *,
         apply_reranker: bool = False,
+        top_k: int | None = None,
     ) -> Any:
         if mode not in {"bm25", "semantic", "hybrid"}:
             raise ValueError(f"Неизвестный режим поиска: {mode!r}")
@@ -835,13 +1282,16 @@ class SchemaSearchBackend:
             else:
                 raise ValueError(f"Неизвестный тип даты события: {date_kind!r}")
 
+        result_limit = self.top_k if top_k is None else top_k
+        if result_limit < 1:
+            raise ValueError("top_k должен быть не меньше 1.")
         dense_scores = await self._dense_scores(query) if mode in {"semantic", "hybrid"} else None
         if mode != "bm25" and dense_scores is None:
             raise ModelAPIError("embeddings: семантический режим недоступен")
         evidence_items = self.index.search(
             query,
             index_filters,
-            top_k=self.top_k,
+            top_k=result_limit,
             ranking=mode,
             dense_scores=dense_scores,
         )
@@ -855,7 +1305,7 @@ class SchemaSearchBackend:
                 ranked_indices = await self.client.rerank(
                     query,
                     [item["title"] + "\n" + item["text"] for item in evidence_items],
-                    top_n=self.client.settings.reranker_top_n,
+                    top_n=min(self.client.settings.reranker_top_n, result_limit),
                 )
                 reranked = [evidence_items[position] for position in ranked_indices]
                 query_contracts = {
@@ -928,6 +1378,9 @@ class SchemaSearchBackend:
                     "date_sources",
                     "provision_date_sources",
                     "renewal",
+                    "local_conditions",
+                    "provision_relations",
+                    "provision_gaps",
                     "score",
                     "retrieval_reason",
                 )
@@ -965,6 +1418,217 @@ class SchemaSearchBackend:
             ))
         return SearchResult(evidence=converted, candidates=candidates)
 
+    async def search_bundle(
+        self,
+        parts: Sequence[str],
+        filters: Any,
+        *,
+        top_k: int | None = None,
+        max_context_chars: int = 12000,
+        mode: str | None = None,
+    ) -> dict[str, Any]:
+        """Search question parts and return dependency-closed, provenance-safe groups."""
+        normalized_parts = [part.strip() for part in parts if isinstance(part, str) and part.strip()]
+        if not normalized_parts:
+            raise ValueError("Для комплектования оснований нужна хотя бы одна часть вопроса.")
+        if max_context_chars < 1:
+            raise ValueError("max_context_chars должен быть положительным.")
+        result_limit = self.top_k if top_k is None else top_k
+        if result_limit < 1:
+            raise ValueError("top_k должен быть не меньше 1.")
+
+        direct_by_group: list[list[dict[str, Any]]] = []
+        group_sources: list[dict[str, Any]] = []
+        direct_results: dict[str, Any] = {}
+        scores_by_chunk: dict[str, float] = {}
+        filter_values = (
+            filters.model_dump(mode="json", exclude_none=True)
+            if hasattr(filters, "model_dump")
+            else dict(filters or {})
+        )
+        specification_date = filter_values.get("specification_signed_at")
+        if filter_values.get("date_kind") in {"specification_signed", "specification_signed_at"}:
+            specification_date = filter_values.get("event_date") or specification_date
+        specification_date = _date(specification_date)
+        bundle_event_dates: dict[str, str | None] = {
+            "contract_signed_at": filter_values.get("signed_at"),
+            "event": filter_values.get("as_of") or filter_values.get("event_date"),
+            "delivery": filter_values.get("as_of") or filter_values.get("event_date"),
+            "notice": filter_values.get("as_of") or filter_values.get("event_date"),
+        }
+        for part in normalized_parts:
+            if part not in direct_results:
+                if mode is None:
+                    direct_results[part] = await self.search(part, filters)
+                else:
+                    direct_results[part] = await self.search_with_mode(
+                        part,
+                        filters,
+                        mode,
+                        top_k=result_limit,
+                    )
+            result = direct_results[part]
+            direct_items = []
+            for evidence in result.evidence:
+                item = self.index.get_chunk(evidence.chunk_id)
+                item["score"] = evidence.metadata.get("score", 0.0)
+                scores_by_chunk[evidence.chunk_id] = float(item["score"] or 0.0)
+                item["applicability"] = evaluate_applicability(
+                    item,
+                    specification_date,
+                    bundle_event_dates,
+                )
+                direct_items.append(item)
+            direct_by_group.append(direct_items)
+            group_sources.append({
+                "part": part,
+                "direct_chunk_ids": [item["chunk_id"] for item in direct_items],
+                "missing": not bool(direct_items),
+                "clarification": result.clarification,
+                "candidates": list(result.candidates),
+            })
+
+        relations_by_chunk: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for relation in self.index.provision_relations:
+            relations_by_chunk[relation["from_chunk_id"]].append(relation)
+            if relation["to_chunk_id"] != relation["from_chunk_id"]:
+                relations_by_chunk[relation["to_chunk_id"]].append(relation)
+
+        def dependency_closure(seed_id: str) -> tuple[set[str], dict[str, dict[str, Any]]]:
+            chunk_ids = {seed_id}
+            found_relations: dict[str, dict[str, Any]] = {}
+            frontier = [seed_id]
+            for _ in range(3):
+                next_frontier: list[str] = []
+                for chunk_id in frontier:
+                    for relation in relations_by_chunk.get(chunk_id, []):
+                        found_relations[relation["relation_id"]] = relation
+                        for related_id in (
+                            relation["from_chunk_id"],
+                            relation["to_chunk_id"],
+                            *relation["supporting_chunk_ids"],
+                        ):
+                            if related_id not in chunk_ids:
+                                chunk_ids.add(related_id)
+                                next_frontier.append(related_id)
+                frontier = next_frontier
+                if not frontier:
+                    break
+            return chunk_ids, found_relations
+
+        admitted_ids: set[str] = set()
+        admitted_relations: dict[str, dict[str, Any]] = {}
+        omitted_ids: set[str] = set()
+        group_records: list[dict[str, Any]] = []
+
+        def interval_cost(chunk_ids: set[str]) -> int:
+            ranges: dict[str, list[tuple[int, int]]] = defaultdict(list)
+            for chunk_id in chunk_ids:
+                chunk = self.index.get_chunk(chunk_id)
+                ranges[chunk["document_id"]].append((chunk["start_char"], chunk["end_char"]))
+            total = 0
+            for intervals in ranges.values():
+                merged: list[list[int]] = []
+                for start, end in sorted(intervals):
+                    if merged and start <= merged[-1][1]:
+                        merged[-1][1] = max(merged[-1][1], end)
+                    else:
+                        merged.append([start, end])
+                total += sum(end - start for start, end in merged)
+            return total
+
+        for group, direct_items in zip(group_sources, direct_by_group):
+            ordered_hits = sorted(
+                direct_items,
+                key=lambda item: (
+                    -float(item.get("score") or 0.0),
+                    item["source_file"],
+                    item["start_char"],
+                ),
+            )
+            group_ids: set[str] = set()
+            group_relations: dict[str, dict[str, Any]] = {}
+            group_omitted: set[str] = set()
+            for hit in ordered_hits:
+                bundle_ids, bundle_relations = dependency_closure(hit["chunk_id"])
+                candidate_ids = admitted_ids | bundle_ids
+                if interval_cost(candidate_ids) > max_context_chars:
+                    group_omitted.update(bundle_ids - admitted_ids)
+                    omitted_ids.update(bundle_ids - admitted_ids)
+                    continue
+                admitted_ids.update(bundle_ids)
+                group_ids.update(bundle_ids)
+                group_relations.update(bundle_relations)
+                admitted_relations.update(bundle_relations)
+            group_records.append({
+                **group,
+                "evidence_chunk_ids": sorted(group_ids),
+                "relation_ids": sorted(group_relations),
+                "truncated": bool(group_omitted),
+                "omitted_chunk_ids": sorted(group_omitted),
+            })
+
+        def evidence_payload(chunk_id: str) -> dict[str, Any]:
+            chunk = self.index.get_chunk(chunk_id)
+            payload = {
+                key: value
+                for key, value in chunk.items()
+                if key not in {"previous_chunk_id", "next_chunk_id"}
+            }
+            payload["applicability"] = evaluate_applicability(
+                payload,
+                specification_date,
+                bundle_event_dates,
+            )
+            if chunk_id in scores_by_chunk:
+                payload["score"] = scores_by_chunk[chunk_id]
+            return payload
+
+        evidence_payloads = [evidence_payload(chunk_id) for chunk_id in sorted(admitted_ids)]
+        context_by_document: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for chunk_id in admitted_ids:
+            context_by_document[self.index.get_chunk(chunk_id)["document_id"]].append(
+                self.index.get_chunk(chunk_id)
+            )
+        context_spans: list[dict[str, Any]] = []
+        for document_id, chunks in context_by_document.items():
+            document = self.index.get_document(document_id)
+            intervals: list[dict[str, Any]] = []
+            for chunk in sorted(chunks, key=lambda item: (item["start_char"], item["end_char"])):
+                if intervals and chunk["start_char"] <= intervals[-1]["end_char"]:
+                    interval = intervals[-1]
+                    interval["end_char"] = max(interval["end_char"], chunk["end_char"])
+                    interval["source_chunk_ids"].append(chunk["chunk_id"])
+                else:
+                    intervals.append({
+                        "document_id": document_id,
+                        "source_file": document["source_file"],
+                        "start_char": chunk["start_char"],
+                        "end_char": chunk["end_char"],
+                        "source_chunk_ids": [chunk["chunk_id"]],
+                    })
+            for interval in intervals:
+                interval["text"] = document["text"][interval["start_char"]:interval["end_char"]]
+                context_spans.append(interval)
+
+        relevant_gaps = [
+            gap for gap in self.index.provision_gaps
+            if gap.get("source_chunk_id") in admitted_ids
+            or gap.get("source_chunk_id") in omitted_ids
+        ]
+        return {
+            "groups": group_records,
+            "evidence": evidence_payloads,
+            "relations": list(admitted_relations.values()),
+            "gaps": relevant_gaps,
+            "missing_parts": [group["part"] for group in group_records if group["missing"]],
+            "context_spans": context_spans,
+            "context_chars": sum(len(span["text"]) for span in context_spans),
+            "max_context_chars": max_context_chars,
+            "truncated": bool(omitted_ids),
+            "omitted_chunk_ids": sorted(omitted_ids),
+        }
+
     async def _ensure_document_vectors(self) -> dict[str, list[float]] | None:
         if self.client is None or not self.client.settings.embedding_model:
             self.embedding_status = "not_configured"
@@ -976,32 +1640,34 @@ class SchemaSearchBackend:
             if self._document_vectors is not None:
                 self.embedding_status = "ready"
                 return self._document_vectors
-            cached_vectors = self._load_cached_vectors()
-            if cached_vectors is not None:
+            inputs = self._embedding_inputs()
+            cached_vectors = self._load_cached_vectors(inputs) or {}
+            if len(cached_vectors) == len(inputs):
                 self._document_vectors = cached_vectors
                 self._embedding_failures = 0
                 self._embedding_retry_after = 0.0
                 self.embedding_status = "ready"
                 return cached_vectors
-            texts = [
-                f"{chunk['title']}\n{chunk.get('section_reference') or ''}\n{chunk['text']}"
-                for chunk in self.index.chunks
+            vectors = dict(cached_vectors)
+            dimension = len(next(iter(vectors.values()))) if vectors else None
+            missing_chunks = [
+                chunk for chunk in self.index.chunks
+                if chunk["chunk_id"] not in vectors
             ]
-            vectors: dict[str, list[float]] = {}
-            dimension: int | None = None
-            for start in range(0, len(texts), 32):
-                batch = texts[start:start + 32]
+            for start in range(0, len(missing_chunks), 32):
+                batch_chunks = missing_chunks[start:start + 32]
+                batch = [inputs[chunk["chunk_id"]] for chunk in batch_chunks]
                 batch_vectors = await self.client.embeddings(batch)
                 if len(batch_vectors) != len(batch):
                     raise ModelProtocolError("/embeddings: количество векторов не совпало с текстами")
-                for chunk, vector in zip(self.index.chunks[start:start + 32], batch_vectors):
+                for chunk, vector in zip(batch_chunks, batch_vectors):
                     if dimension is None:
                         dimension = len(vector)
                     elif len(vector) != dimension:
                         raise ModelProtocolError("/embeddings: размерность векторов корпуса различается")
                     vectors[chunk["chunk_id"]] = vector
+                self._save_cached_vectors(vectors, inputs)
             self._document_vectors = vectors
-            self._save_cached_vectors(vectors)
             self._embedding_failures = 0
             self._embedding_retry_after = 0.0
             self.embedding_status = "ready"
