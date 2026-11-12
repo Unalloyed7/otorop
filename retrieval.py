@@ -29,6 +29,7 @@ from knowledge_pipeline import (
     RESOLUTION_VERSION,
     attach_relations,
     resolve_candidates,
+    validate_relation_semantics,
 )
 from llm_client import LLMClient, ModelAPIError, ModelProtocolError, Settings
 
@@ -221,6 +222,11 @@ class SearchIndex:
         self._link_documents()
         if graph_snapshot is None:
             self._link_provisions()
+            for relation in self.provision_relations:
+                relation["semantic_validation"] = validate_relation_semantics(relation, self)
+                relation.setdefault("checks", {})["relation_type"] = relation["semantic_validation"]["status"]
+                if relation["semantic_validation"]["status"] == "contradicted":
+                    relation["type_status"] = "requires_review"
         else:
             self._restore_graph(graph_snapshot)
         self._build_bm25()
@@ -246,6 +252,10 @@ class SearchIndex:
                 state.get(chunk["chunk_id"], {}).get("local_conditions", [])
             )
         for relation in self.provision_relations:
+            relation["semantic_validation"] = validate_relation_semantics(relation, self)
+            relation.setdefault("checks", {})["relation_type"] = relation["semantic_validation"]["status"]
+            if relation["semantic_validation"]["status"] == "contradicted":
+                relation["type_status"] = "requires_review"
             for chunk_id in {
                 relation.get("from_chunk_id"),
                 relation.get("to_chunk_id"),
@@ -1201,13 +1211,16 @@ class SchemaSearchBackend:
         *,
         knowledge_pipeline: KnowledgePipeline | None = None,
         llm_relations: bool = False,
+        review_relations: bool = False,
     ) -> None:
         self.index = index
         self.client = client
         self.top_k = top_k
         self.knowledge_pipeline = knowledge_pipeline
         self.llm_relations = llm_relations
+        self.review_relations = review_relations
         self._llm_relations_loaded = False
+        self._relation_review_loaded = False
         self._relation_lock = asyncio.Lock()
         self._embedding_lock = asyncio.Lock()
         self._document_vectors: dict[str, list[float]] | None = None
@@ -1298,6 +1311,46 @@ class SchemaSearchBackend:
     async def prepare_knowledge_graph(self) -> None:
         """Run the explicitly enabled, bounded LLM enrichment stage."""
         await self._ensure_llm_relations()
+        await self._ensure_relation_review()
+
+    async def _ensure_relation_review(self) -> None:
+        if self._relation_review_loaded or not self.review_relations:
+            return
+        pipeline = self.knowledge_pipeline
+        if pipeline is None or self.client is None:
+            message = (
+                "Семантическая проверка типов связей не выполнена: "
+                "клиент или хранилище кэша недоступны."
+            )
+            self.diagnostics.append(message)
+            logger.warning("knowledge pipeline: %s", message)
+            self._relation_review_loaded = True
+            return
+        try:
+            limit = int(os.environ.get("KNOWLEDGE_RELATION_REVIEW_MAX", "24"))
+            report = await pipeline.review_relation_types(
+                self.index,
+                self.client,
+                max_relations=limit,
+            )
+            self.index.pipeline_diagnostics["relation_semantic_review"] = report
+            self.diagnostics.append(
+                "Семантическая проверка связей: "
+                f"проверено {report['reviewed']}, решения {report['decisions']}."
+            )
+        except Exception as exc:
+            message = (
+                "Семантическая проверка типов связей не завершена: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            self.index.pipeline_diagnostics["relation_semantic_review"] = {
+                "status": "failed",
+                "error": message,
+            }
+            self.diagnostics.append(message)
+            logger.warning("knowledge pipeline: %s", message)
+        finally:
+            self._relation_review_loaded = True
 
     def _cache_path(self) -> Path:
         if self._embedding_cache_file is None:
@@ -1457,7 +1510,7 @@ class SchemaSearchBackend:
         apply_reranker: bool = False,
         top_k: int | None = None,
     ) -> Any:
-        await self._ensure_llm_relations()
+        await self.prepare_knowledge_graph()
         if mode not in {"bm25", "semantic", "hybrid"}:
             raise ValueError(f"Неизвестный режим поиска: {mode!r}")
         from schemas import SearchResult
@@ -1663,11 +1716,51 @@ class SchemaSearchBackend:
 
         evidence = self._as_evidence(bundle["evidence"])
         groups = bundle["groups"]
+        coverage_by_part = {
+            group["part"]: {
+                "status": group.get("coverage", {}).get("status"),
+                "basis": group.get("coverage", {}).get("basis"),
+                "conditions": group.get("coverage", {}).get("conditions"),
+                "exceptions": group.get("coverage", {}).get("exceptions"),
+                "gaps": {
+                    "status": group.get("coverage", {}).get("gaps", {}).get("status"),
+                    "count": len(group.get("coverage", {}).get("gaps", {}).get("items", [])),
+                    "resolutions": group.get("coverage", {}).get("gaps", {}).get("gap_resolutions", []),
+                },
+            }
+            for group in groups
+        }
         for item in evidence:
             item.metadata["bundle_parts"] = [group["part"] for group in groups
                                               if item.chunk_id in group["evidence_chunk_ids"]]
             item.metadata["bundle_truncated"] = bundle["truncated"]
+            item.metadata["coverage_by_part"] = {
+                part: coverage_by_part[part]
+                for part in item.metadata["bundle_parts"]
+                if part in coverage_by_part
+            }
+            item.metadata["search_recovery"] = {
+                "stop_reason": bundle.get("recovery", {}).get("stop_reason"),
+                "queries_used": bundle.get("recovery", {}).get("queries_used", 0),
+                "query_budget": bundle.get("recovery", {}).get("query_budget", 0),
+            }
         missing = list(bundle["missing_parts"])
+        for group in groups:
+            coverage = group.get("coverage", {})
+            if group.get("missing") and group["part"] not in missing:
+                missing.append(group["part"])
+            if coverage.get("gaps", {}).get("status") == "present":
+                missing.append(
+                    f"Не разрешены ссылки/основания для части вопроса: {group['part']}"
+                )
+            if coverage.get("status") != "covered":
+                missing.append(
+                    "Матрица поиска для части "
+                    f"«{group['part']}»: основание={coverage.get('basis', {}).get('status')}; "
+                    f"условия={coverage.get('conditions', {}).get('status')}; "
+                    f"исключения={coverage.get('exceptions', {}).get('status')}; "
+                    f"неразрешённых пробелов={len(coverage.get('gaps', {}).get('items', []))}."
+                )
         if bundle["truncated"]:
             missing.append("Часть связанных оснований не поместилась в бюджет контекста; полный комплект не проверен")
         clarifications = list(dict.fromkeys(g["clarification"] for g in groups if g.get("clarification")))
@@ -1686,6 +1779,8 @@ class SchemaSearchBackend:
         query_context: str | None = None,
         existing_chunk_ids: Sequence[str] = (),
         mode: str | None = None,
+        recovery_rounds: int = 2,
+        recovery_query_budget: int = 8,
     ) -> dict[str, Any]:
         """Search question parts and return dependency-closed, provenance-safe groups."""
         normalized_parts = [part.strip() for part in parts if isinstance(part, str) and part.strip()]
@@ -1695,6 +1790,8 @@ class SchemaSearchBackend:
             raise ValueError("max_context_chars должен быть положительным.")
         if max_context_chunks is not None and max_context_chunks < 1:
             raise ValueError("max_context_chunks должен быть положительным.")
+        if recovery_rounds < 0 or recovery_query_budget < 0:
+            raise ValueError("Бюджет повторного поиска не должен быть отрицательным.")
         result_limit = self.top_k if top_k is None else top_k
         if result_limit < 1:
             raise ValueError("top_k должен быть не меньше 1.")
@@ -1733,8 +1830,9 @@ class SchemaSearchBackend:
             result = direct_results[part]
             direct_items = []
             for evidence in result.evidence[:result_limit]:
-                item = self.index.get_chunk(evidence.chunk_id)
+                item = dict(self.index.get_chunk(evidence.chunk_id))
                 item["score"] = evidence.metadata.get("score", 0.0)
+                item["recovery_round"] = 0
                 scores_by_chunk[evidence.chunk_id] = float(item["score"] or 0.0)
                 item["applicability"] = evaluate_applicability(
                     item,
@@ -1751,6 +1849,235 @@ class SchemaSearchBackend:
                 "clarification": result.clarification,
                 "candidates": list(result.candidates),
             })
+
+        recovery_queries: list[dict[str, Any]] = []
+        recovery_state = {
+            "rounds": 0,
+            "queries_used": 0,
+            "query_budget": recovery_query_budget,
+            "round_limit": recovery_rounds,
+            "stop_reason": "not_needed",
+        }
+
+        def direct_gaps(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            chunk_ids = {item["chunk_id"] for item in items}
+            return [
+                gap for gap in self.index.provision_gaps
+                if gap.get("source_chunk_id") in chunk_ids
+            ]
+
+        def explicit_filter_resolutions(
+            group_index: int,
+            gaps: list[dict[str, Any]],
+        ) -> list[dict[str, Any]]:
+            resolved = []
+            for gap in gaps:
+                gap_kind = gap.get("kind")
+                if gap_kind == "referenced_provision_ambiguous":
+                    candidate_ids = gap.get("candidate_chunk_ids", [])
+                    candidates = [
+                        self.index.get_chunk(chunk_id)
+                        for chunk_id in candidate_ids
+                        if chunk_id in self.index._by_chunk_id
+                    ]
+                elif gap_kind == "referenced_document_ambiguous":
+                    candidate_document_ids = gap.get("candidate_document_ids", [])
+                    candidates = []
+                    for candidate_document_id in candidate_document_ids:
+                        document_chunks = [
+                            item for item in self.index.chunks
+                            if item["document_id"] == candidate_document_id
+                        ]
+                        if document_chunks:
+                            candidates.append(min(
+                                document_chunks,
+                                key=lambda item: (item["start_char"], item["chunk_id"]),
+                            ))
+                else:
+                    continue
+                if len(candidates) < 2:
+                    continue
+                if any(
+                    item.get("source_chunk_id") == gap.get("source_chunk_id")
+                    and item.get("target_reference") == gap.get("target_reference")
+                    for item in group_resolutions[group_index]
+                ):
+                    continue
+                contract = filter_values.get("contract_number")
+                party = filter_values.get("counterparty")
+                document_id = filter_values.get("document_id")
+                if contract:
+                    candidates = [
+                        item for item in candidates
+                        if item.get("contract_number") == contract
+                    ]
+                if party:
+                    requested = _party_key(str(party))
+                    candidates = [
+                        item for item in candidates
+                        if any(_party_key(value) == requested for value in (
+                            item.get("counterparties") or [item.get("counterparty") or ""]
+                        ))
+                    ]
+                if document_id:
+                    candidates = [
+                        item for item in candidates
+                        if item.get("document_id") == document_id
+                    ]
+                if len(candidates) != 1:
+                    continue
+                candidate = dict(candidates[0])
+                candidate["recovery_round"] = 0
+                candidate["recovery_reason"] = "explicit_filter_resolved_reference"
+                if all(
+                    existing["chunk_id"] != candidate["chunk_id"]
+                    for existing in direct_by_group[group_index]
+                ):
+                    direct_by_group[group_index].append(candidate)
+                resolved.append({
+                    "gap_id": gap.get("candidate_id") or gap.get("source_chunk_id"),
+                    "source_chunk_id": gap.get("source_chunk_id"),
+                    "target_reference": gap.get("target_reference"),
+                    "kind": gap_kind,
+                    "status": "resolved_by_explicit_filter",
+                    "chunk_id": candidate["chunk_id"],
+                    "filter": "contract_number" if contract else "counterparty" if party else "document_id",
+                })
+            return resolved
+
+        group_resolutions: list[list[dict[str, Any]]] = [
+            [] for _ in direct_by_group
+        ]
+        for group_index, items in enumerate(direct_by_group):
+            group_resolutions[group_index].extend(
+                explicit_filter_resolutions(group_index, direct_gaps(items))
+            )
+
+        for round_number in range(1, recovery_rounds + 1):
+            work: list[tuple[int, str, str]] = []
+            seen_queries = {
+                (record["part"], record["query"])
+                for record in recovery_queries
+            }
+            for group_index, (group, items) in enumerate(zip(group_sources, direct_by_group)):
+                gaps = direct_gaps(items)
+                if not items:
+                    query = " ".join(filter(None, (
+                        group["part"],
+                        query_context,
+                        "подтверждающее положение условие исключение порядок",
+                    )))
+                    key = (group["part"], query)
+                    if key not in seen_queries:
+                        work.append((group_index, query, "part_without_direct_evidence"))
+                        seen_queries.add(key)
+                for gap in gaps:
+                    if not str(gap.get("kind", "")).startswith(("referenced_", "unresolved_")):
+                        continue
+                    gap_key = gap.get("candidate_id") or (
+                        f"{gap.get('source_chunk_id')}:{gap.get('target_reference')}"
+                    )
+                    if any(
+                        resolution["gap_id"] == gap_key
+                        or (
+                            resolution.get("source_chunk_id") == gap.get("source_chunk_id")
+                            and resolution.get("target_reference") == gap.get("target_reference")
+                        )
+                        for resolution in group_resolutions[group_index]
+                    ):
+                        continue
+                    reference = gap.get("target_reference")
+                    source_text = str(gap.get("source_text") or "")
+                    source_chunk = self.index._by_chunk_id.get(gap.get("source_chunk_id"), {})
+                    query = " ".join(filter(None, (
+                        group["part"],
+                        f"пункт {reference}" if reference else None,
+                        source_chunk.get("title"),
+                        source_text,
+                        query_context,
+                    )))
+                    key = (group["part"], query)
+                    if key not in seen_queries:
+                        work.append((group_index, query[:2400], f"unresolved_{gap.get('kind')}"))
+                        seen_queries.add(key)
+            if not work:
+                recovery_state["stop_reason"] = "coverage_satisfied"
+                break
+            if recovery_state["queries_used"] >= recovery_query_budget:
+                recovery_state["stop_reason"] = "query_budget_exhausted"
+                break
+
+            added_this_round = 0
+            recovery_state["rounds"] = round_number
+            for group_index, query, reason in work:
+                if recovery_state["queries_used"] >= recovery_query_budget:
+                    recovery_state["stop_reason"] = "query_budget_exhausted"
+                    break
+                group = group_sources[group_index]
+                result = (
+                    await self.search(query, filters)
+                    if mode is None
+                    else await self.search_with_mode(query, filters, mode, top_k=result_limit)
+                )
+                recovery_state["queries_used"] += 1
+                new_count = 0
+                for evidence in result.evidence[:result_limit]:
+                    if any(
+                        item["chunk_id"] == evidence.chunk_id
+                        for item in direct_by_group[group_index]
+                    ):
+                        continue
+                    item = dict(self.index.get_chunk(evidence.chunk_id))
+                    item["score"] = evidence.metadata.get("score", 0.0)
+                    item["recovery_round"] = round_number
+                    item["recovery_reason"] = reason
+                    item["applicability"] = evaluate_applicability(
+                        item,
+                        specification_date,
+                        bundle_event_dates,
+                    )
+                    direct_by_group[group_index].append(item)
+                    scores_by_chunk[evidence.chunk_id] = float(item["score"] or 0.0)
+                    new_count += 1
+                added_this_round += new_count
+                recovery_queries.append({
+                    "part": group["part"],
+                    "round": round_number,
+                    "reason": reason,
+                    "query": query,
+                    "new_chunk_count": new_count,
+                    "result_chunk_ids": [e.chunk_id for e in result.evidence[:result_limit]],
+                })
+                group["recovered_chunk_ids"] = list(dict.fromkeys(
+                    [*group.get("recovered_chunk_ids", []), *[
+                        e.chunk_id for e in result.evidence[:result_limit]
+                        if any(item["chunk_id"] == e.chunk_id and item.get("recovery_round") == round_number
+                               for item in direct_by_group[group_index])
+                    ]]
+                ))
+                group["missing"] = not bool(direct_by_group[group_index])
+                newly_resolved = explicit_filter_resolutions(
+                    group_index,
+                    direct_gaps(direct_by_group[group_index]),
+                )
+                group_resolutions[group_index].extend(newly_resolved)
+
+            if recovery_state["stop_reason"] == "query_budget_exhausted":
+                break
+            if not added_this_round:
+                recovery_state["stop_reason"] = "no_new_evidence"
+                break
+        else:
+            recovery_state["stop_reason"] = "round_limit_reached"
+
+        if (
+            recovery_state["stop_reason"] == "not_needed"
+            and any(not items or direct_gaps(items) for items in direct_by_group)
+        ):
+            recovery_state["stop_reason"] = (
+                "query_budget_exhausted" if recovery_query_budget == 0
+                else "round_limit_reached"
+            )
 
         relations_by_chunk: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for relation in self.index.provision_relations:
@@ -1812,7 +2139,7 @@ class SchemaSearchBackend:
         ):
             raise ValueError("Уже переданный контекст превышает бюджет комплекта.")
 
-        for group, direct_items in zip(group_sources, direct_by_group):
+        for group_index, (group, direct_items) in enumerate(zip(group_sources, direct_by_group)):
             ordered_hits = sorted(
                 direct_items,
                 key=lambda item: (
@@ -1841,6 +2168,7 @@ class SchemaSearchBackend:
                 **group,
                 "evidence_chunk_ids": sorted(group_ids),
                 "relation_ids": sorted(group_relations),
+                "gap_resolutions": group_resolutions[group_index],
                 "truncated": bool(group_omitted),
                 "omitted_chunk_ids": sorted(group_omitted),
             })
@@ -1896,6 +2224,121 @@ class SchemaSearchBackend:
             if gap.get("source_chunk_id") in admitted_ids
             or gap.get("source_chunk_id") in omitted_ids
         ]
+        relation_by_id = {
+            relation["relation_id"]: relation
+            for relation in self.index.provision_relations
+        }
+        condition_requested = re.compile(
+            r"\b(?:когда|с какого|до какого|при каком|услови\w*|применя\w*|"
+            r"после|начиная с|дата|редакци\w*|действу\w*|продл\w*|уведомлен\w*)\b",
+            re.IGNORECASE,
+        )
+        exception_requested = re.compile(
+            r"\b(?:исключени\w*|кроме|за исключением|не распространя\w*|"
+            r"не применя\w*|льгот\w*|особый порядок)\b",
+            re.IGNORECASE,
+        )
+        for group_index, group in enumerate(group_records):
+            admitted_for_group = set(group["evidence_chunk_ids"])
+            group_relations_for_coverage = [
+                relation_by_id[relation_id]
+                for relation_id in group["relation_ids"]
+                if relation_id in relation_by_id
+            ]
+            condition_ids = set()
+            exception_ids = set()
+            for chunk_id in admitted_for_group:
+                chunk = self.index.get_chunk(chunk_id)
+                local_kinds = {
+                    item.get("kind") for item in chunk.get("local_conditions", [])
+                }
+                if (
+                    chunk.get("chunk_role") == "applicability_condition"
+                    or chunk.get("applicability_conditions")
+                    or "condition" in local_kinds
+                ):
+                    condition_ids.add(chunk_id)
+                if "exception" in local_kinds:
+                    exception_ids.add(chunk_id)
+            for relation in group_relations_for_coverage:
+                relation_chunks = {
+                    relation.get("from_chunk_id"),
+                    relation.get("to_chunk_id"),
+                    *relation.get("supporting_chunk_ids", []),
+                }
+                relation_chunks &= admitted_for_group
+                if relation["type"] in {
+                    "defines_applicability", "condition_for", "applies_to",
+                }:
+                    condition_ids.update(relation_chunks)
+                if relation["type"] in {
+                    "establishes_exception", "exception_to", "possible_exception_to",
+                }:
+                    exception_ids.update(relation_chunks)
+            resolved_gap_keys = {
+                item["gap_id"] for item in group["gap_resolutions"]
+            }
+            group_gaps = [
+                gap for gap in relevant_gaps
+                if gap.get("source_chunk_id") in admitted_for_group
+                and (gap.get("candidate_id") or (
+                    f"{gap.get('source_chunk_id')}:{gap.get('target_reference')}"
+                )) not in resolved_gap_keys
+                and not any(
+                    resolution.get("source_chunk_id") == gap.get("source_chunk_id")
+                    and resolution.get("target_reference") == gap.get("target_reference")
+                    for resolution in group["gap_resolutions"]
+                )
+            ]
+            basis_ids = list(dict.fromkeys(
+                group["direct_chunk_ids"]
+                + group.get("recovered_chunk_ids", [])
+                + [item["chunk_id"] for item in group["gap_resolutions"]]
+            ))
+            basis_found = bool(basis_ids)
+            condition_is_requested = bool(condition_requested.search(group["part"]))
+            exception_is_requested = bool(exception_requested.search(group["part"]))
+            condition_status = (
+                "found" if condition_ids else
+                "missing_in_retrieved_bundle" if condition_is_requested else
+                "not_explicitly_requested"
+            )
+            exception_status = (
+                "found" if exception_ids else
+                "missing_in_retrieved_bundle" if exception_is_requested else
+                "not_explicitly_requested"
+            )
+            complete = (
+                basis_found
+                and condition_status != "missing_in_retrieved_bundle"
+                and exception_status != "missing_in_retrieved_bundle"
+                and not group_gaps
+                and not group["truncated"]
+            )
+            group["missing"] = not complete
+            group["coverage"] = {
+                "status": "covered" if complete else "partial" if basis_found else "uncovered",
+                "basis": {
+                    "required": True,
+                    "status": "found" if basis_found else "missing",
+                    "chunk_ids": basis_ids,
+                },
+                "conditions": {
+                    "required": condition_is_requested,
+                    "status": condition_status,
+                    "chunk_ids": sorted(condition_ids),
+                },
+                "exceptions": {
+                    "required": exception_is_requested,
+                    "status": exception_status,
+                    "chunk_ids": sorted(exception_ids),
+                },
+                "gaps": {
+                    "status": "present" if group_gaps else "none_detected_in_indexed_graph",
+                    "items": group_gaps,
+                    "gap_resolutions": group["gap_resolutions"],
+                },
+            }
         return {
             "groups": group_records,
             "evidence": evidence_payloads,
@@ -1909,6 +2352,10 @@ class SchemaSearchBackend:
             "max_context_chunks": max_context_chunks,
             "truncated": bool(omitted_ids),
             "omitted_chunk_ids": sorted(omitted_ids),
+            "recovery": {
+                **recovery_state,
+                "queries": recovery_queries,
+            },
             "pipeline": deepcopy(getattr(self.index, "pipeline_diagnostics", {})),
         }
 
@@ -2098,7 +2545,10 @@ def create_search(data_dir: str | Path, client: Any = None) -> SchemaSearchBacke
     llm_relations = os.environ.get("KNOWLEDGE_LLM_EXTRACTION", "").strip().casefold() in {
         "1", "true", "yes", "on",
     }
-    index = build_index(kb_path, retain_pipeline=llm_relations)
+    review_relations = os.environ.get("KNOWLEDGE_RELATION_REVIEW", "").strip().casefold() in {
+        "1", "true", "yes", "on",
+    }
+    index = build_index(kb_path, retain_pipeline=llm_relations or review_relations)
     configured_top_k = getattr(getattr(client, "settings", None), "top_k", 10)
     return SchemaSearchBackend(
         index,
@@ -2106,6 +2556,7 @@ def create_search(data_dir: str | Path, client: Any = None) -> SchemaSearchBacke
         top_k=configured_top_k,
         knowledge_pipeline=getattr(index, "knowledge_pipeline", None),
         llm_relations=llm_relations,
+        review_relations=review_relations,
     )
 
 
@@ -2119,6 +2570,11 @@ def _main() -> int:
         "--llm-relations",
         action="store_true",
         help="Запустить ограниченное извлечение кандидатов связей через настроенный LLMClient",
+    )
+    parser.add_argument(
+        "--review-relations",
+        action="store_true",
+        help="Проверить смысл типов связей через настроенный LLMClient",
     )
     parser.add_argument("--stats", action="store_true", help="Вывести замеры сборки и размер сериализуемого индекса")
     parser.add_argument(
@@ -2134,17 +2590,18 @@ def _main() -> int:
     index = build_index(
         args.kb_path,
         pipeline_cache_path=args.pipeline_cache,
-        retain_pipeline=args.llm_relations,
+        retain_pipeline=args.llm_relations or args.review_relations,
     )
     build_ms = (time.perf_counter() - start) * 1000
-    if args.llm_relations:
+    if args.llm_relations or args.review_relations:
         try:
             client = LLMClient(Settings.from_env())
             backend = SchemaSearchBackend(
                 index,
                 client=client,
                 knowledge_pipeline=index.knowledge_pipeline,
-                llm_relations=True,
+                llm_relations=args.llm_relations,
+                review_relations=args.review_relations,
             )
 
             async def enrich() -> None:

@@ -412,6 +412,7 @@ class LegalAssistant:
                             omitted_chunk_ids=bundle["omitted_chunk_ids"],
                             context_chars=bundle["context_chars"],
                             evidence_chars=bundle["evidence_chars"],
+                            recovery=bundle.get("recovery", {}),
                             pipeline=bundle.get("pipeline", {}))
                 else:
                     found = SearchResult.model_validate(await self.search.search(query, filters))
