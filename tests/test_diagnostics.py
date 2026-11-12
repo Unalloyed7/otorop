@@ -11,7 +11,7 @@ from conftest import FakeSearch
 from diagnostics import active_run, append_report, capture_run
 from llm_client import LLMClient
 from solution import run_submission
-from tools.evaluate_answers import compare_records
+from tools.evaluate_answers import build_case_reviews, compare_records, load_case_suite
 from tools.package_submission import package
 
 
@@ -89,6 +89,103 @@ def test_comparison_keeps_manual_quality_unscored():
     assert result["same_evidence"]
     assert result["manual_review"]["attack_resisted"] is None
     assert result["baseline_calls"] != result["checked_calls"]
+
+
+def test_case_suite_resolves_official_and_local_questions(tmp_path):
+    source_questions = tmp_path / "questions.csv"
+    source_questions.write_text("id,question\n001,Официальный вопрос\n", encoding="utf-8")
+    cases_path = tmp_path / "cases.json"
+    cases_path.write_text(json.dumps({
+        "documents": {"contract": "Договор № 1"},
+        "cases": [
+            {"question_id": "001", "expected_disposition": "answer", "required_claims": []},
+            {"id": "challenge-19", "question_id": None, "question": "Локальный вопрос",
+             "expected_disposition": "answer", "required_claims": []},
+        ],
+    }), encoding="utf-8")
+
+    cases, documents, rows = load_case_suite(cases_path, source_questions)
+
+    assert [row[0] for row in rows] == ["001", "challenge-19"]
+    assert [row[1] for row in rows] == ["Официальный вопрос", "Локальный вопрос"]
+    assert len(cases) == 2 and documents == {"contract": "Договор № 1"}
+
+
+def test_checked_in_case_annotations_load_as_one_suite(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    cases_path = repo_root / "evals" / "answer_cases.json"
+    payload = json.loads(cases_path.read_text(encoding="utf-8"))
+    official_ids = sorted({
+        case["question_id"] for case in payload["cases"]
+        if case.get("question_id") is not None
+    })
+    questions_path = tmp_path / "questions.csv"
+    questions_path.write_text(
+        "id,question\n" + "".join(f"{question_id},Источник {question_id}\n" for question_id in official_ids),
+        encoding="utf-8",
+    )
+
+    cases, documents, rows = load_case_suite(cases_path, questions_path)
+
+    assert len(cases) == len(rows) == 28
+    assert len({row[0] for row in rows}) == 28
+    assert sum(row[0].startswith("challenge-") for row in rows) == 10
+    assert documents == payload["documents"]
+
+
+def test_case_review_checks_retrieval_but_leaves_answer_quality_manual():
+    cases = [{
+        "id": "challenge-19",
+        "question": "Срок оплаты?",
+        "expected_disposition": "answer",
+        "required_claims": [{
+            "fact": "Оплата в течение 30 дней.",
+            "evidence": [{"document": "contract", "section": "4.2"}],
+        }],
+        "must_not_claim": ["Срок оплаты — 90 дней."],
+    }]
+    record = {
+        "id": "challenge-19",
+        "question": "Срок оплаты?",
+        "answer": {"status": "answer", "text": "30 дней"},
+        "calls": {"/chat/completions": 2},
+        "stages": [{
+            "stage": "search",
+            "evidence": [{
+                "document_id": "doc-1",
+                "chunk_id": "chunk-1",
+                "document_title": "Договор № 1",
+                "section": "п. 4.2",
+                "text": "Оплата в течение 30 календарных дней.",
+            }],
+        }],
+    }
+
+    review = build_case_reviews(cases, {"contract": "Договор № 1"}, [record])[0]
+
+    assert review["retrieval"] == {"expected_sources_found": 1, "expected_sources_total": 1}
+    assert review["expected"]["required_claims"][0]["sources"][0]["retrieved"] is True
+    assert review["manual_review"]["disposition_correct"] is None
+    assert review["manual_review"]["must_not_claims"] == [
+        {"claim": "Срок оплаты — 90 дней.", "violated": None},
+    ]
+
+
+def test_case_review_marks_missing_run_as_unassessed():
+    cases = [{
+        "id": "challenge-19",
+        "expected_disposition": "answer",
+        "required_claims": [{
+            "fact": "Оплата в течение 30 дней.",
+            "evidence": [{"document": "contract", "section": "4.2"}],
+        }],
+    }]
+
+    review = build_case_reviews(cases, {"contract": "Договор № 1"}, [])[0]
+
+    assert review["run"] is None
+    assert review["retrieval"] == {"expected_sources_found": None, "expected_sources_total": 1}
+    assert review["expected"]["required_claims"][0]["sources"][0]["retrieved"] is None
 
 
 async def test_report_preserves_fences_before_json_normalization(settings):

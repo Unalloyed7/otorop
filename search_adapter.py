@@ -200,9 +200,9 @@ class LexicalSearch:
         return SearchResult(evidence=selected)
 
 
-async def build_search(client: LLMClient | None):
+async def build_search(client: LLMClient | None, *, data_dir: Path | None = None):
     factory_path = env_value("SEARCH_FACTORY", default="retrieval:create_search")
-    data_dir = Path(env_value("DATA_DIR", default="data"))
+    data_dir = data_dir or Path(env_value("DATA_DIR", default="data"))
     module, attribute = factory_path.split(":", 1)
     factory = getattr(importlib.import_module(module), attribute)
     backend = factory(data_dir=data_dir, client=client)

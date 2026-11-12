@@ -84,6 +84,16 @@ async def test_team_search_is_default(corpus, local_settings, monkeypatch):
     assert len(backend.index.documents) == 7
 
 
+async def test_build_search_uses_explicit_data_dir(corpus, local_settings, monkeypatch, tmp_path):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "not-the-corpus"))
+    monkeypatch.delenv("SEARCH_FACTORY", raising=False)
+
+    backend = await build_search(FakeClient(local_settings), data_dir=corpus)
+
+    assert isinstance(backend, SchemaSearchBackend)
+    assert len(backend.index.documents) == 7
+
+
 async def test_bm25_reformulations_retrieve_approval_policy_ahead_of_tax_noise(corpus):
     index = create_search(corpus).index
     policy_clause = next(
