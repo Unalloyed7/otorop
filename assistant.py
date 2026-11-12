@@ -411,7 +411,8 @@ class LegalAssistant:
                             gaps=bundle["gaps"], truncated=bundle["truncated"],
                             omitted_chunk_ids=bundle["omitted_chunk_ids"],
                             context_chars=bundle["context_chars"],
-                            evidence_chars=bundle["evidence_chars"])
+                            evidence_chars=bundle["evidence_chars"],
+                            pipeline=bundle.get("pipeline", {}))
                 else:
                     found = SearchResult.model_validate(await self.search.search(query, filters))
                 _record(trace, "search", attempt=attempt, query=query, filters=filters.model_dump(mode="json"), evidence=[e.model_dump(mode="json") for e in found.evidence], missing_info=found.missing_info)
