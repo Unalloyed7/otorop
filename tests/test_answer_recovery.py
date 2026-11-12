@@ -56,6 +56,10 @@ async def test_invalid_first_claim_and_verifier_reindex(settings, evidence):
     assert "[1]" in answer.text and "[2]" not in answer.text
     assert answer.citations[0].claim_index == 0
     assert len(client.requests[2][1]["claims"]) == 1
+    verification = client.requests[2][1]
+    assert verification["allowed_claim_indices"] == [0]
+    assert verification["claims"][0]["claim_index"] == 0
+    assert verification["claims"][0]["addresses"] == [1]
 
 
 async def test_recovery_adds_new_claim_without_losing_verified_one(settings, evidence):
