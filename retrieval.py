@@ -16,14 +16,23 @@ import tempfile
 import time
 import tracemalloc
 from collections import Counter, defaultdict
+from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
 from documents import PROCESSOR_VERSION, load_documents, split_document
+from knowledge_pipeline import (
+    GRAPH_VERSION,
+    LLM_PROMPT_VERSION,
+    KnowledgePipeline,
+    RESOLUTION_VERSION,
+    attach_relations,
+    resolve_candidates,
+)
 from llm_client import LLMClient, ModelAPIError, ModelProtocolError, Settings
 
-RETRIEVAL_VERSION = "retrieval-v6"
+RETRIEVAL_VERSION = "retrieval-v7"
 EMBEDDING_CACHE_VERSION = 2
 EMBEDDING_RETRY_BASE_SECONDS = 30.0
 EMBEDDING_RETRY_MAX_SECONDS = 300.0
@@ -187,12 +196,21 @@ def evaluate_applicability(
 class SearchIndex:
     """In-memory index. Evidence dictionaries are JSON-serializable."""
 
-    def __init__(self, documents: list[dict[str, Any]], max_chunk_chars: int = 1800) -> None:
+    def __init__(
+        self,
+        documents: list[dict[str, Any]],
+        max_chunk_chars: int = 1800,
+        *,
+        chunks: list[dict[str, Any]] | None = None,
+        graph_snapshot: dict[str, Any] | None = None,
+    ) -> None:
         self.max_chunk_chars = max_chunk_chars
+        self.pipeline_diagnostics: dict[str, Any] = {}
+        self.pipeline_graph_fingerprint: str | None = None
+        self.knowledge_pipeline: KnowledgePipeline | None = None
         self.documents: dict[str, dict[str, Any]] = {doc["document_id"]: doc for doc in documents}
-        self.chunks = [
-            chunk
-            for document in documents
+        self.chunks = deepcopy(chunks) if chunks is not None else [
+            chunk for document in documents
             for chunk in split_document(document, max_chars=self.max_chunk_chars)
         ]
         self._by_chunk_id = {chunk["chunk_id"]: chunk for chunk in self.chunks}
@@ -201,7 +219,10 @@ class SearchIndex:
             for position, chunk in enumerate(self.chunks)
         }
         self._link_documents()
-        self._link_provisions()
+        if graph_snapshot is None:
+            self._link_provisions()
+        else:
+            self._restore_graph(graph_snapshot)
         self._build_bm25()
         manifest = [
             (doc["source_file"], doc["content_sha256"])
@@ -213,6 +234,29 @@ class SearchIndex:
                 ensure_ascii=False,
             ).encode("utf-8")
         ).hexdigest()
+
+    def _restore_graph(self, snapshot: dict[str, Any]) -> None:
+        self.provision_relations = deepcopy(snapshot.get("relations", []))
+        self.provision_gaps = deepcopy(snapshot.get("gaps", []))
+        state = snapshot.get("chunk_state", {})
+        for chunk in self.chunks:
+            chunk["provision_relations"] = []
+            chunk["provision_gaps"] = []
+            chunk["local_conditions"] = deepcopy(
+                state.get(chunk["chunk_id"], {}).get("local_conditions", [])
+            )
+        for relation in self.provision_relations:
+            for chunk_id in {
+                relation.get("from_chunk_id"),
+                relation.get("to_chunk_id"),
+                *relation.get("supporting_chunk_ids", []),
+            }:
+                if chunk_id in self._by_chunk_id:
+                    self._by_chunk_id[chunk_id]["provision_relations"].append(relation)
+        for gap in self.provision_gaps:
+            chunk_id = gap.get("source_chunk_id")
+            if chunk_id in self._by_chunk_id:
+                self._by_chunk_id[chunk_id]["provision_gaps"].append(gap)
 
     def _link_documents(self) -> None:
         ids = sorted(self.documents)
@@ -313,6 +357,19 @@ class SearchIndex:
             target_reference: str | None = None,
         ) -> dict[str, Any]:
             quote = quote_chunk["text"]
+            supporting_document = self.documents[quote_chunk["document_id"]]
+            canonical_types = {
+                "changes_provision": "amends",
+                "supplements_provision": "supplements",
+                "removes_provision": "repeals",
+                "replaces_provision": "replaces",
+                "defines_applicability": "condition_for",
+                "supersedes_edition": "supersedes",
+                "establishes_exception": "exception_to",
+                "possible_exception_to": "exception_to",
+                "supplements_procedure": "supplements",
+                "references_provision": "references",
+            }
             identity = "\0".join((
                 relation_type,
                 from_chunk["chunk_id"],
@@ -331,6 +388,26 @@ class SearchIndex:
                 "confidence": confidence,
                 "quote": quote,
                 "supporting_chunk_ids": [quote_chunk["chunk_id"]],
+                "supporting_ranges": [{
+                    "document_id": quote_chunk["document_id"],
+                    "source_file": supporting_document["source_file"],
+                    "start_char": quote_chunk["start_char"],
+                    "end_char": quote_chunk["end_char"],
+                    "text": quote,
+                }],
+                "extraction_method": "deterministic",
+                "algorithm_version": "provision-relations-v2",
+                "model": None,
+                "prompt_version": None,
+                "target_status": "resolved",
+                "canonical_type": canonical_types.get(relation_type, "references"),
+                "type_status": "inferred" if confidence != "explicit" else "candidate",
+                "checks": {
+                    "quote": "verified",
+                    "coordinates": "verified",
+                    "target": "resolved",
+                    "relation_type": "candidate" if confidence == "explicit" else "inferred",
+                },
             }
             if not any(existing["relation_id"] == relation["relation_id"] for existing in self.provision_relations):
                 self.provision_relations.append(relation)
@@ -1066,18 +1143,72 @@ class SearchIndex:
         }
 
 
-def build_index(kb_path: str | Path) -> SearchIndex:
+def build_index(
+    kb_path: str | Path,
+    *,
+    pipeline_cache_path: str | Path | None = None,
+    retain_pipeline: bool = False,
+) -> SearchIndex:
     """Build an index from exactly the knowledge-base path supplied by the caller."""
-    return SearchIndex(load_documents(kb_path))
+    pipeline = KnowledgePipeline(kb_path, pipeline_cache_path)
+    try:
+        documents = load_documents(kb_path)
+        processed = pipeline.prepare(documents)
+        graph_fingerprint = hashlib.sha256(
+            json.dumps(
+                [
+                    processed["corpus_fingerprint"],
+                    RETRIEVAL_VERSION,
+                    GRAPH_VERSION,
+                    RESOLUTION_VERSION,
+                ],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        graph = pipeline.get_graph(graph_fingerprint)
+        index = SearchIndex(
+            documents,
+            chunks=processed["chunks"],
+            graph_snapshot=graph,
+        )
+        if graph is None:
+            relations, gaps = resolve_candidates(index, processed["candidates"])
+            attach_relations(index, relations, gaps)
+            pipeline.save_graph(graph_fingerprint, index)
+        pipeline.finish_run(index, graph_fingerprint, graph_cached=graph is not None)
+        index.pipeline_diagnostics = pipeline.report()
+        index.pipeline_graph_fingerprint = graph_fingerprint
+        if retain_pipeline:
+            index.knowledge_pipeline = pipeline
+        else:
+            pipeline.close()
+        return index
+    except Exception as exc:
+        pipeline.fail_run(exc)
+        pipeline.close()
+        raise
 
 
 class SchemaSearchBackend:
     """Adapt the local index to the shared async SearchBackend contract."""
 
-    def __init__(self, index: SearchIndex, client: Any = None, top_k: int = 10) -> None:
+    def __init__(
+        self,
+        index: SearchIndex,
+        client: Any = None,
+        top_k: int = 10,
+        *,
+        knowledge_pipeline: KnowledgePipeline | None = None,
+        llm_relations: bool = False,
+    ) -> None:
         self.index = index
         self.client = client
         self.top_k = top_k
+        self.knowledge_pipeline = knowledge_pipeline
+        self.llm_relations = llm_relations
+        self._llm_relations_loaded = False
+        self._relation_lock = asyncio.Lock()
         self._embedding_lock = asyncio.Lock()
         self._document_vectors: dict[str, list[float]] | None = None
         self.diagnostics: list[str] = []
@@ -1086,6 +1217,87 @@ class SchemaSearchBackend:
         self._embedding_failures = 0
         self._embedding_retry_after = 0.0
         self._embedding_cache_file: Path | None = None
+
+    async def _ensure_llm_relations(self) -> None:
+        if self._llm_relations_loaded or not self.llm_relations:
+            return
+        async with self._relation_lock:
+            if self._llm_relations_loaded:
+                return
+            pipeline = self.knowledge_pipeline
+            if pipeline is None or self.client is None:
+                self.diagnostics.append(
+                    "LLM-извлечение связей не выполнено: клиент или хранилище кэша недоступны."
+                )
+                self._llm_relations_loaded = True
+                return
+            try:
+                limit = int(os.environ.get("KNOWLEDGE_LLM_MAX_CHUNKS", "16"))
+                if not 1 <= limit <= 64:
+                    raise ValueError("KNOWLEDGE_LLM_MAX_CHUNKS должен быть от 1 до 64.")
+                model = self.client.settings.model
+                graph_fingerprint = pipeline.llm_graph_fingerprint(
+                    self.index.chunks,
+                    base_graph_fingerprint=(
+                        self.index.pipeline_graph_fingerprint or self.index.fingerprint
+                    ),
+                    model=model,
+                    max_chunks=limit,
+                )
+                graph_version = f"{GRAPH_VERSION}:llm"
+                cached_graph = pipeline.get_graph(
+                    graph_fingerprint,
+                    stage_version=graph_version,
+                )
+                if cached_graph is not None:
+                    self.index._restore_graph(cached_graph)
+                    report = {
+                        "status": "cached",
+                        "model": model,
+                        "prompt_version": LLM_PROMPT_VERSION,
+                    }
+                    self.index.pipeline_diagnostics["llm_relations"] = report
+                    self.diagnostics.append(
+                        f"LLM-граф восстановлен из кэша для модели {model}."
+                    )
+                    self._llm_relations_loaded = True
+                    return
+                candidates, report = await pipeline.llm_candidates(
+                    self.index.chunks,
+                    self.client,
+                    max_chunks=limit,
+                )
+                relations, gaps = resolve_candidates(self.index, candidates)
+                attach_relations(self.index, relations, gaps)
+                if report["status"] == "complete":
+                    pipeline.save_graph(
+                        graph_fingerprint,
+                        self.index,
+                        stage_version=graph_version,
+                    )
+                self.index.pipeline_diagnostics["llm_relations"] = report
+                self.diagnostics.append(
+                    "LLM-извлечение связей: "
+                    f"{report['status']}, кандидатов {report['relations']}, "
+                    f"ошибок {len(report['failures'])}."
+                )
+            except Exception as exc:
+                message = (
+                    "LLM-извлечение связей не завершено; детерминированный граф сохранён: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                self.index.pipeline_diagnostics["llm_relations"] = {
+                    "status": "failed",
+                    "error": message,
+                }
+                self.diagnostics.append(message)
+                logger.warning("knowledge pipeline: %s", message)
+            finally:
+                self._llm_relations_loaded = True
+
+    async def prepare_knowledge_graph(self) -> None:
+        """Run the explicitly enabled, bounded LLM enrichment stage."""
+        await self._ensure_llm_relations()
 
     def _cache_path(self) -> Path:
         if self._embedding_cache_file is None:
@@ -1245,6 +1457,7 @@ class SchemaSearchBackend:
         apply_reranker: bool = False,
         top_k: int | None = None,
     ) -> Any:
+        await self._ensure_llm_relations()
         if mode not in {"bm25", "semantic", "hybrid"}:
             raise ValueError(f"Неизвестный режим поиска: {mode!r}")
         from schemas import SearchResult
@@ -1696,6 +1909,7 @@ class SchemaSearchBackend:
             "max_context_chunks": max_context_chunks,
             "truncated": bool(omitted_ids),
             "omitted_chunk_ids": sorted(omitted_ids),
+            "pipeline": deepcopy(getattr(self.index, "pipeline_diagnostics", {})),
         }
 
     async def _ensure_document_vectors(self) -> dict[str, list[float]] | None:
@@ -1881,9 +2095,18 @@ def create_search(data_dir: str | Path, client: Any = None) -> SchemaSearchBacke
             (data_path / name for name in candidates if (data_path / name).is_file()),
             data_path,
         )
-    index = build_index(kb_path)
+    llm_relations = os.environ.get("KNOWLEDGE_LLM_EXTRACTION", "").strip().casefold() in {
+        "1", "true", "yes", "on",
+    }
+    index = build_index(kb_path, retain_pipeline=llm_relations)
     configured_top_k = getattr(getattr(client, "settings", None), "top_k", 10)
-    return SchemaSearchBackend(index, client=client, top_k=configured_top_k)
+    return SchemaSearchBackend(
+        index,
+        client=client,
+        top_k=configured_top_k,
+        knowledge_pipeline=getattr(index, "knowledge_pipeline", None),
+        llm_relations=llm_relations,
+    )
 
 
 def _main() -> int:
@@ -1891,6 +2114,12 @@ def _main() -> int:
     parser.add_argument("kb_path", type=Path, help="ZIP-архив базы знаний или распакованный каталог")
     parser.add_argument("--query", help="Выполнить один поисковый запрос")
     parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--pipeline-cache", type=Path, help="Путь к SQLite-кэшу стадий конвейера")
+    parser.add_argument(
+        "--llm-relations",
+        action="store_true",
+        help="Запустить ограниченное извлечение кандидатов связей через настроенный LLMClient",
+    )
     parser.add_argument("--stats", action="store_true", help="Вывести замеры сборки и размер сериализуемого индекса")
     parser.add_argument(
         "--compare-csv",
@@ -1902,9 +2131,33 @@ def _main() -> int:
     if args.stats:
         tracemalloc.start()
     start = time.perf_counter()
-    index = build_index(args.kb_path)
+    index = build_index(
+        args.kb_path,
+        pipeline_cache_path=args.pipeline_cache,
+        retain_pipeline=args.llm_relations,
+    )
     build_ms = (time.perf_counter() - start) * 1000
+    if args.llm_relations:
+        try:
+            client = LLMClient(Settings.from_env())
+            backend = SchemaSearchBackend(
+                index,
+                client=client,
+                knowledge_pipeline=index.knowledge_pipeline,
+                llm_relations=True,
+            )
+
+            async def enrich() -> None:
+                try:
+                    await backend.prepare_knowledge_graph()
+                finally:
+                    await client.aclose()
+
+            asyncio.run(enrich())
+        finally:
+            index.knowledge_pipeline.close()
     stats = index.stats()
+    stats["knowledge_pipeline"] = deepcopy(index.pipeline_diagnostics)
     if args.stats:
         _, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
