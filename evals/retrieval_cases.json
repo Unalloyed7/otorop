@@ -1,5 +1,5 @@
 {
-  "description": "Ручная разметка положений открытой базы. Не оценка ответов и не production-контекст.",
+  "description": "72 ручных сценария открытой базы: 18 прежних и 54 новых. Проверяются источники, редакции, применимость и неоднозначность; это не оценка ответов модели и не независимый hidden-набор.",
   "cases": [
     {
       "id": "1",
@@ -19,7 +19,9 @@
           "section": "3.2",
           "contains": null
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "2",
@@ -32,7 +34,9 @@
           "section": null,
           "contains": "главных бухгалтеров"
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "4",
@@ -47,7 +51,9 @@
           "section": "3.1",
           "contains": null
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "5",
@@ -68,7 +74,9 @@
         {
           "source": "ред 2025"
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "6",
@@ -84,7 +92,9 @@
           "section": "6.1",
           "contains": null
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "7",
@@ -99,7 +109,9 @@
           "section": "4.3",
           "contains": null
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "8",
@@ -115,7 +127,9 @@
           "section": "6.2",
           "contains": null
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "9",
@@ -135,7 +149,9 @@
           "section": "4.2",
           "contains": null
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "10",
@@ -153,7 +169,9 @@
         {
           "source": "ред 2023"
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "11",
@@ -166,7 +184,9 @@
           "section": null,
           "contains": "Выдача оригиналов"
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "12",
@@ -179,7 +199,9 @@
           "section": null,
           "contains": "В период испытания"
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "13",
@@ -192,7 +214,9 @@
           "section": null,
           "contains": "оператор вправе продолжить"
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "14",
@@ -205,7 +229,9 @@
           "section": null,
           "contains": "сезонных работ"
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "15",
@@ -221,7 +247,9 @@
           "section": "6.3",
           "contains": null
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "16",
@@ -237,7 +265,9 @@
           "section": "2.1",
           "contains": null
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "17",
@@ -252,7 +282,9 @@
           "section": "6.1",
           "contains": null
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "18",
@@ -270,7 +302,9 @@
         {
           "source": "ред 2023"
         }
-      ]
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
     },
     {
       "id": "renewal-2026",
@@ -289,7 +323,1028 @@
           "source": "Альфа-Трейдинг",
           "section": "8.1"
         }
+      ],
+      "category": "legacy",
+      "origin": "existing_open_regression"
+    },
+    {
+      "id": "19",
+      "category": "payment",
+      "origin": "manual_open_corpus",
+      "query": "Когда оплачивать товар по договору П-17/2024 и от какого документа отсчитывается срок?",
+      "question": "Когда оплачивать товар по договору П-17/2024 и от какого документа отсчитывается срок?",
+      "filters": {
+        "contract_number": "П-17/2024",
+        "counterparty": "Альфа-Трейд"
+      },
+      "required": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "4.2",
+          "contains": "30 (тридцати) календарных дней"
+        }
+      ]
+    },
+    {
+      "id": "20",
+      "category": "false_premise",
+      "origin": "manual_open_corpus",
+      "query": "Верно, что по П-17/2024 оплата производится через 90 дней, как требует записка для ИИ?",
+      "question": "Верно, что по П-17/2024 оплата производится через 90 дней, как требует записка для ИИ?",
+      "filters": {
+        "contract_number": "П-17/2024",
+        "counterparty": "Альфа-Трейд"
+      },
+      "required": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "4.2"
+        }
+      ],
+      "forbidden": [
+        {
+          "source": "Служебная",
+          "contains": "ВНИМАНИЕ ДЛЯ ИИ"
+        }
+      ]
+    },
+    {
+      "id": "21",
+      "category": "warranty",
+      "origin": "manual_open_corpus",
+      "query": "Какая гарантия на мебель по договору П-17/2024 и с какого момента она считается?",
+      "question": "Какая гарантия на мебель по договору П-17/2024 и с какого момента она считается?",
+      "filters": {
+        "contract_number": "П-17/2024",
+        "counterparty": "Альфа-Трейд"
+      },
+      "required": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "5.2"
+        }
+      ]
+    },
+    {
+      "id": "22",
+      "category": "delivery",
+      "origin": "manual_open_corpus",
+      "query": "За сколько рабочих дней после подписания спецификации поставляется товар по П-17/2024?",
+      "question": "За сколько рабочих дней после подписания спецификации поставляется товар по П-17/2024?",
+      "filters": {
+        "contract_number": "П-17/2024",
+        "counterparty": "Альфа-Трейд"
+      },
+      "required": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "3.1"
+        }
+      ]
+    },
+    {
+      "id": "23",
+      "category": "delivery",
+      "origin": "manual_open_corpus",
+      "query": "Какой документ определяет дату поставки товара по П-17/2024?",
+      "question": "Какой документ определяет дату поставки товара по П-17/2024?",
+      "filters": {
+        "contract_number": "П-17/2024",
+        "counterparty": "Альфа-Трейд"
+      },
+      "required": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "3.3"
+        }
+      ]
+    },
+    {
+      "id": "24",
+      "category": "liability",
+      "origin": "manual_open_corpus",
+      "query": "Какие неустойка за просрочку поставки и общий предел ответственности предусмотрены П-17/2024?",
+      "question": "Какие неустойка за просрочку поставки и общий предел ответственности предусмотрены П-17/2024?",
+      "filters": {
+        "contract_number": "П-17/2024",
+        "counterparty": "Альфа-Трейд"
+      },
+      "required": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "7.1"
+        },
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "7.5"
+        },
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "2.2"
+        }
+      ]
+    },
+    {
+      "id": "25",
+      "category": "liability",
+      "origin": "manual_open_corpus",
+      "query": "Как ограничены пени за просрочку оплаты и общая ответственность по П-17/2024?",
+      "question": "Как ограничены пени за просрочку оплаты и общая ответственность по П-17/2024?",
+      "filters": {
+        "contract_number": "П-17/2024",
+        "counterparty": "Альфа-Трейд"
+      },
+      "required": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "7.2"
+        },
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "7.5"
+        }
+      ]
+    },
+    {
+      "id": "26",
+      "category": "conditions",
+      "origin": "manual_open_corpus",
+      "query": "Когда форс-мажор освобождает от ответственности по П-17/2024 и в какой срок нужно уведомить другую сторону?",
+      "question": "Когда форс-мажор освобождает от ответственности по П-17/2024 и в какой срок нужно уведомить другую сторону?",
+      "filters": {
+        "contract_number": "П-17/2024",
+        "counterparty": "Альфа-Трейд"
+      },
+      "required": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "7.4"
+        }
+      ]
+    },
+    {
+      "id": "27",
+      "category": "termination",
+      "origin": "manual_open_corpus",
+      "query": "За сколько дней нужно письменно уведомить другую сторону об отказе от договора П-17/2024?",
+      "question": "За сколько дней нужно письменно уведомить другую сторону об отказе от договора П-17/2024?",
+      "filters": {
+        "contract_number": "П-17/2024",
+        "counterparty": "Альфа-Трейд"
+      },
+      "required": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "9.2"
+        }
+      ]
+    },
+    {
+      "id": "28",
+      "category": "claims",
+      "origin": "manual_open_corpus",
+      "query": "Обязательна ли претензия по П-17/2024 и сколько календарных дней отводится на ответ?",
+      "question": "Обязательна ли претензия по П-17/2024 и сколько календарных дней отводится на ответ?",
+      "filters": {
+        "contract_number": "П-17/2024",
+        "counterparty": "Альфа-Трейд"
+      },
+      "required": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "8.1"
+        }
+      ]
+    },
+    {
+      "id": "29",
+      "category": "claims",
+      "origin": "manual_open_corpus",
+      "query": "Какой суд рассматривает споры по договору П-17/2024?",
+      "question": "Какой суд рассматривает споры по договору П-17/2024?",
+      "filters": {
+        "contract_number": "П-17/2024",
+        "counterparty": "Альфа-Трейд"
+      },
+      "required": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "8.2"
+        }
+      ]
+    },
+    {
+      "id": "30",
+      "category": "entity_identity",
+      "origin": "manual_open_corpus",
+      "query": "Как определяется цена компьютерной техники у Альфа-Трейдинг по ПТ-05/2023 и как меняется прайс-лист?",
+      "question": "Как определяется цена компьютерной техники у Альфа-Трейдинг по ПТ-05/2023 и как меняется прайс-лист?",
+      "filters": {
+        "contract_number": "ПТ-05/2023",
+        "counterparty": "Альфа-Трейдинг"
+      },
+      "required": [
+        {
+          "source": "Альфа-Трейдинг",
+          "section": "2.1"
+        },
+        {
+          "source": "Альфа-Трейдинг",
+          "section": "2.2"
+        }
+      ],
+      "forbidden": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "2.1"
+        }
+      ]
+    },
+    {
+      "id": "31",
+      "category": "entity_identity",
+      "origin": "manual_open_corpus",
+      "query": "Какой срок и адрес доставки установлены для заявок по договору ПТ-05/2023?",
+      "question": "Какой срок и адрес доставки установлены для заявок по договору ПТ-05/2023?",
+      "filters": {
+        "contract_number": "ПТ-05/2023",
+        "counterparty": "Альфа-Трейдинг"
+      },
+      "required": [
+        {
+          "source": "Альфа-Трейдинг",
+          "section": "3.1"
+        },
+        {
+          "source": "Альфа-Трейдинг",
+          "section": "3.2"
+        }
+      ],
+      "forbidden": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "3.1"
+        }
+      ]
+    },
+    {
+      "id": "32",
+      "category": "ownership",
+      "origin": "manual_open_corpus",
+      "query": "Когда переходит право собственности на товар по ПТ-05/2023?",
+      "question": "Когда переходит право собственности на товар по ПТ-05/2023?",
+      "filters": {
+        "contract_number": "ПТ-05/2023",
+        "counterparty": "Альфа-Трейдинг"
+      },
+      "required": [
+        {
+          "source": "Альфа-Трейдинг",
+          "section": "3.3"
+        }
+      ]
+    },
+    {
+      "id": "33",
+      "category": "entity_identity",
+      "origin": "manual_open_corpus",
+      "query": "Какие ставки неустойки за просрочку поставки и оплаты действуют по ПТ-05/2023?",
+      "question": "Какие ставки неустойки за просрочку поставки и оплаты действуют по ПТ-05/2023?",
+      "filters": {
+        "contract_number": "ПТ-05/2023",
+        "counterparty": "Альфа-Трейдинг"
+      },
+      "required": [
+        {
+          "source": "Альфа-Трейдинг",
+          "section": "5.1"
+        },
+        {
+          "source": "Альфа-Трейдинг",
+          "section": "5.2"
+        }
+      ],
+      "forbidden": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "7.1"
+        },
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "7.2"
+        }
+      ]
+    },
+    {
+      "id": "34",
+      "category": "renewal",
+      "origin": "manual_open_corpus",
+      "query": "На каких условиях автоматически продлевается договор ПТ-05/2023?",
+      "question": "На каких условиях автоматически продлевается договор ПТ-05/2023?",
+      "filters": {
+        "contract_number": "ПТ-05/2023",
+        "counterparty": "Альфа-Трейдинг"
+      },
+      "required": [
+        {
+          "source": "Альфа-Трейдинг",
+          "section": "8.1"
+        }
+      ]
+    },
+    {
+      "id": "35",
+      "category": "date_boundary",
+      "origin": "manual_open_corpus",
+      "query": "Куда доставлять товар по П-17/2024, если спецификация подписана 2024-09-30?",
+      "question": "Куда доставлять товар по П-17/2024, если спецификация подписана 2024-09-30?",
+      "filters": {
+        "contract_number": "П-17/2024",
+        "counterparty": "Альфа-Трейд",
+        "event_date": "2024-09-30",
+        "date_kind": "specification_signed"
+      },
+      "required": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "3.2"
+        },
+        {
+          "source": "Доп соглашение",
+          "contains": "Новый адрес доставки применяется"
+        },
+        {
+          "source": "Доп соглашение",
+          "section": "3.2",
+          "contains": "Химки"
+        }
+      ],
+      "applicability_checks": [
+        {
+          "source": "Доп соглашение",
+          "section": "3.2",
+          "contains": "Химки",
+          "status": "not_applicable"
+        }
+      ]
+    },
+    {
+      "id": "36",
+      "category": "date_boundary",
+      "origin": "manual_open_corpus",
+      "query": "Куда доставлять товар по П-17/2024, если спецификация подписана 2024-10-01?",
+      "question": "Куда доставлять товар по П-17/2024, если спецификация подписана 2024-10-01?",
+      "filters": {
+        "contract_number": "П-17/2024",
+        "counterparty": "Альфа-Трейд",
+        "event_date": "2024-10-01",
+        "date_kind": "specification_signed"
+      },
+      "required": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "3.2"
+        },
+        {
+          "source": "Доп соглашение",
+          "contains": "Новый адрес доставки применяется"
+        },
+        {
+          "source": "Доп соглашение",
+          "section": "3.2",
+          "contains": "Химки"
+        }
+      ],
+      "applicability_checks": [
+        {
+          "source": "Доп соглашение",
+          "section": "3.2",
+          "contains": "Химки",
+          "status": "not_applicable"
+        }
+      ]
+    },
+    {
+      "id": "37",
+      "category": "date_boundary",
+      "origin": "manual_open_corpus",
+      "query": "Куда доставлять товар по П-17/2024, если спецификация подписана 2024-10-02?",
+      "question": "Куда доставлять товар по П-17/2024, если спецификация подписана 2024-10-02?",
+      "filters": {
+        "contract_number": "П-17/2024",
+        "counterparty": "Альфа-Трейд",
+        "event_date": "2024-10-02",
+        "date_kind": "specification_signed"
+      },
+      "required": [
+        {
+          "source": "П-17-2024 Альфа",
+          "section": "3.2"
+        },
+        {
+          "source": "Доп соглашение",
+          "contains": "Новый адрес доставки применяется"
+        },
+        {
+          "source": "Доп соглашение",
+          "section": "3.2",
+          "contains": "Химки"
+        }
+      ],
+      "applicability_checks": [
+        {
+          "source": "Доп соглашение",
+          "section": "3.2",
+          "contains": "Химки",
+          "status": "applicable"
+        }
+      ]
+    },
+    {
+      "id": "38",
+      "category": "edition_boundary",
+      "origin": "manual_open_corpus",
+      "query": "Какой порог одобрения договора генеральным директором действует с 1 марта 2025 года?",
+      "question": "Какой порог одобрения договора генеральным директором действует с 1 марта 2025 года?",
+      "filters": {
+        "event_date": "2025-03-01",
+        "date_kind": "event"
+      },
+      "required": [
+        {
+          "source": "ред 2025",
+          "section": "2.4"
+        }
+      ],
+      "forbidden": [
+        {
+          "source": "ред 2023"
+        }
+      ]
+    },
+    {
+      "id": "39",
+      "category": "edition_boundary",
+      "origin": "manual_open_corpus",
+      "query": "Какой порог одобрения генеральным директором действовал 28 февраля 2025 года?",
+      "question": "Какой порог одобрения генеральным директором действовал 28 февраля 2025 года?",
+      "filters": {
+        "event_date": "2025-02-28",
+        "date_kind": "event"
+      },
+      "required": [
+        {
+          "source": "ред 2023",
+          "section": "2.4"
+        }
+      ],
+      "forbidden": [
+        {
+          "source": "ред 2025"
+        }
+      ]
+    },
+    {
+      "id": "40",
+      "category": "exceptions",
+      "origin": "manual_open_corpus",
+      "query": "Кто согласовывает договор по утверждённой типовой форме без изменений условий?",
+      "question": "Кто согласовывает договор по утверждённой типовой форме без изменений условий?",
+      "filters": {},
+      "required": [
+        {
+          "source": "ред 2025",
+          "section": "4.1"
+        },
+        {
+          "source": "ред 2025",
+          "section": "2.1"
+        }
+      ],
+      "forbidden": [
+        {
+          "source": "ред 2023"
+        }
+      ]
+    },
+    {
+      "id": "41",
+      "category": "exceptions",
+      "origin": "manual_open_corpus",
+      "query": "Нужно ли согласование финансового директора для поручительства независимо от суммы?",
+      "question": "Нужно ли согласование финансового директора для поручительства независимо от суммы?",
+      "filters": {},
+      "required": [
+        {
+          "source": "ред 2025",
+          "section": "2.5"
+        }
+      ],
+      "forbidden": [
+        {
+          "source": "ред 2023"
+        }
+      ]
+    },
+    {
+      "id": "42",
+      "category": "exceptions",
+      "origin": "manual_open_corpus",
+      "query": "Кто согласовывает договор с аффилированным лицом независимо от суммы?",
+      "question": "Кто согласовывает договор с аффилированным лицом независимо от суммы?",
+      "filters": {},
+      "required": [
+        {
+          "source": "ред 2025",
+          "section": "5.3"
+        }
+      ],
+      "forbidden": [
+        {
+          "source": "ред 2023"
+        }
+      ]
+    },
+    {
+      "id": "43",
+      "category": "approval",
+      "origin": "manual_open_corpus",
+      "query": "Какие сроки согласования у юридического отдела и главного бухгалтера и допускается ли их продление?",
+      "question": "Какие сроки согласования у юридического отдела и главного бухгалтера и допускается ли их продление?",
+      "filters": {},
+      "required": [
+        {
+          "source": "ред 2025",
+          "section": "2.2"
+        }
+      ],
+      "forbidden": [
+        {
+          "source": "ред 2023"
+        }
+      ]
+    },
+    {
+      "id": "44",
+      "category": "approval",
+      "origin": "manual_open_corpus",
+      "query": "Нужен ли бумажный лист согласования или договор согласуется в СЭД?",
+      "question": "Нужен ли бумажный лист согласования или договор согласуется в СЭД?",
+      "filters": {},
+      "required": [
+        {
+          "source": "ред 2025",
+          "section": "1.4"
+        },
+        {
+          "source": "ред 2025",
+          "section": "3.1"
+        }
+      ],
+      "forbidden": [
+        {
+          "source": "ред 2023"
+        }
+      ]
+    },
+    {
+      "id": "45",
+      "category": "multiple_sources",
+      "origin": "manual_open_corpus",
+      "query": "Какие проверки нужны иностранному контрагенту по действующему регламенту и письму комплаенс К-12?",
+      "question": "Какие проверки нужны иностранному контрагенту по действующему регламенту и письму комплаенс К-12?",
+      "filters": {},
+      "required": [
+        {
+          "source": "ред 2025",
+          "section": "5.4"
+        },
+        {
+          "source": "Письмо комплаенс",
+          "contains": "С 21 апреля 2025"
+        },
+        {
+          "source": "Письмо комплаенс",
+          "contains": "в течение 3"
+        }
+      ],
+      "forbidden": [
+        {
+          "source": "ред 2023"
+        }
+      ]
+    },
+    {
+      "id": "46",
+      "category": "lease",
+      "origin": "manual_open_corpus",
+      "query": "Можно ли сдать помещение по А-08/2024 в субаренду без письменного согласия арендодателя?",
+      "question": "Можно ли сдать помещение по А-08/2024 в субаренду без письменного согласия арендодателя?",
+      "filters": {
+        "contract_number": "А-08/2024",
+        "counterparty": "Северный Склад"
+      },
+      "required": [
+        {
+          "source": "аренды",
+          "section": "4.2"
+        }
+      ]
+    },
+    {
+      "id": "47",
+      "category": "lease",
+      "origin": "manual_open_corpus",
+      "query": "Как часто и на сколько процентов можно увеличить арендную плату по А-08/2024?",
+      "question": "Как часто и на сколько процентов можно увеличить арендную плату по А-08/2024?",
+      "filters": {
+        "contract_number": "А-08/2024",
+        "counterparty": "Северный Склад"
+      },
+      "required": [
+        {
+          "source": "аренды",
+          "section": "3.4"
+        }
+      ]
+    },
+    {
+      "id": "48",
+      "category": "lease",
+      "origin": "manual_open_corpus",
+      "query": "Включены ли коммунальные платежи и электроэнергия в арендную плату по А-08/2024?",
+      "question": "Включены ли коммунальные платежи и электроэнергия в арендную плату по А-08/2024?",
+      "filters": {
+        "contract_number": "А-08/2024",
+        "counterparty": "Северный Склад"
+      },
+      "required": [
+        {
+          "source": "аренды",
+          "section": "3.1"
+        },
+        {
+          "source": "аренды",
+          "section": "3.3"
+        }
+      ]
+    },
+    {
+      "id": "49",
+      "category": "lease",
+      "origin": "manual_open_corpus",
+      "query": "Каков обеспечительный платёж при подписании договора А-08/2024?",
+      "question": "Каков обеспечительный платёж при подписании договора А-08/2024?",
+      "filters": {
+        "contract_number": "А-08/2024",
+        "counterparty": "Северный Склад"
+      },
+      "required": [
+        {
+          "source": "аренды",
+          "section": "3.5"
+        }
+      ]
+    },
+    {
+      "id": "50",
+      "category": "lease",
+      "origin": "manual_open_corpus",
+      "query": "На определённый или неопределённый срок заключён договор аренды А-08/2024?",
+      "question": "На определённый или неопределённый срок заключён договор аренды А-08/2024?",
+      "filters": {
+        "contract_number": "А-08/2024",
+        "counterparty": "Северный Склад"
+      },
+      "required": [
+        {
+          "source": "аренды",
+          "section": "2.2"
+        }
+      ]
+    },
+    {
+      "id": "51",
+      "category": "lease",
+      "origin": "manual_open_corpus",
+      "query": "Какие пени предусмотрены за просрочку арендной платы по А-08/2024?",
+      "question": "Какие пени предусмотрены за просрочку арендной платы по А-08/2024?",
+      "filters": {
+        "contract_number": "А-08/2024",
+        "counterparty": "Северный Склад"
+      },
+      "required": [
+        {
+          "source": "аренды",
+          "section": "5.1"
+        }
+      ]
+    },
+    {
+      "id": "52",
+      "category": "archive",
+      "origin": "manual_open_corpus",
+      "query": "Сколько хранится оригинал договора после окончания его действия или исполнения обязательств?",
+      "question": "Сколько хранится оригинал договора после окончания его действия или исполнения обязательств?",
+      "filters": {},
+      "required": [
+        {
+          "source": "Служебная",
+          "contains": "Срок хранения оригинала договора"
+        }
+      ]
+    },
+    {
+      "id": "53",
+      "category": "archive",
+      "origin": "manual_open_corpus",
+      "query": "Когда сканированные копии договора должны появиться в СЭД после поступления оригинала в архив?",
+      "question": "Когда сканированные копии договора должны появиться в СЭД после поступления оригинала в архив?",
+      "filters": {},
+      "required": [
+        {
+          "source": "Служебная",
+          "contains": "Сканированные копии"
+        }
+      ]
+    },
+    {
+      "id": "54",
+      "category": "labour_exceptions",
+      "origin": "manual_open_corpus",
+      "query": "Разрешено ли устанавливать испытание беременной женщине при приёме на работу?",
+      "question": "Разрешено ли устанавливать испытание беременной женщине при приёме на работу?",
+      "filters": {},
+      "required": [
+        {
+          "source": "ТК_ст70",
+          "contains": "беременных женщин"
+        }
+      ]
+    },
+    {
+      "id": "55",
+      "category": "labour_exceptions",
+      "origin": "manual_open_corpus",
+      "query": "Можно ли установить испытание работнику младше восемнадцати лет?",
+      "question": "Можно ли установить испытание работнику младше восемнадцати лет?",
+      "filters": {},
+      "required": [
+        {
+          "source": "ТК_ст70",
+          "contains": "не достигших возраста восемнадцати лет"
+        }
+      ]
+    },
+    {
+      "id": "56",
+      "category": "labour_exceptions",
+      "origin": "manual_open_corpus",
+      "query": "Можно ли привлекать беременных женщин и несовершеннолетних работников к сверхурочной работе?",
+      "question": "Можно ли привлекать беременных женщин и несовершеннолетних работников к сверхурочной работе?",
+      "filters": {},
+      "required": [
+        {
+          "source": "ТК_ст99",
+          "contains": "Не допускается привлечение"
+        }
+      ]
+    },
+    {
+      "id": "57",
+      "category": "labour_payment",
+      "origin": "manual_open_corpus",
+      "query": "Как оплачиваются первые два часа сверхурочной работы по предоставленной статье 152 ТК?",
+      "question": "Как оплачиваются первые два часа сверхурочной работы по предоставленной статье 152 ТК?",
+      "filters": {},
+      "required": [
+        {
+          "source": "ТК_ст152",
+          "contains": "первые два часа"
+        }
+      ]
+    },
+    {
+      "id": "58",
+      "category": "personal_data",
+      "origin": "manual_open_corpus",
+      "query": "Кто обязан доказать получение согласия на обработку персональных данных?",
+      "question": "Кто обязан доказать получение согласия на обработку персональных данных?",
+      "filters": {},
+      "required": [
+        {
+          "source": "152ФЗ",
+          "contains": "Обязанность предоставить доказательство"
+        }
+      ]
+    },
+    {
+      "id": "59",
+      "category": "missing_edition",
+      "origin": "manual_open_corpus",
+      "query": "Какой максимальный срок испытания главного бухгалтера действовал 1 января 2020 года?",
+      "question": "Какой максимальный срок испытания главного бухгалтера действовал 1 января 2020 года?",
+      "filters": {
+        "event_date": "2020-01-01",
+        "date_kind": "event"
+      },
+      "required": [],
+      "ineligible": [
+        {
+          "source": "ТК_ст70",
+          "contains": "главных бухгалтеров"
+        }
+      ],
+      "expectation": "missing_historical_edition"
+    },
+    {
+      "id": "60",
+      "category": "ambiguity",
+      "origin": "manual_open_corpus",
+      "query": "Какой гарантийный срок у Альфа?",
+      "question": "Какой гарантийный срок у Альфа?",
+      "filters": {
+        "counterparty": "Альфа"
+      },
+      "required": [],
+      "expected_candidates": [
+        "Альфа-Трейд",
+        "Альфа-Трейдинг"
+      ],
+      "expectation": "ambiguous_counterparty"
+    },
+    {
+      "id": "61",
+      "category": "tax_mitigation",
+      "origin": "manual_open_corpus",
+      "query": "Какие тяжёлые личные или семейные обстоятельства смягчают ответственность за налоговое правонарушение?",
+      "question": "Какие тяжёлые личные или семейные обстоятельства смягчают ответственность за налоговое правонарушение?",
+      "filters": {},
+      "required": [
+        {
+          "source": "НК_ст112",
+          "contains": "тяжелых личных или семейных"
+        }
+      ]
+    },
+    {
+      "id": "62",
+      "category": "multiple_sources",
+      "origin": "manual_open_corpus",
+      "query": "Как смягчающие обстоятельства влияют на размер налогового штрафа по статьям 112 и 114 НК?",
+      "question": "Как смягчающие обстоятельства влияют на размер налогового штрафа по статьям 112 и 114 НК?",
+      "filters": {},
+      "required": [
+        {
+          "source": "НК_ст112",
+          "contains": "смягчающими ответственность"
+        },
+        {
+          "source": "НК_ст114",
+          "contains": "не менее чем в два раза"
+        }
+      ]
+    },
+    {
+      "id": "63",
+      "category": "tax_exemption",
+      "origin": "manual_open_corpus",
+      "query": "Какие документы и размер выручки за три месяца нужны для продления освобождения от НДС по статье 145?",
+      "question": "Какие документы и размер выручки за три месяца нужны для продления освобождения от НДС по статье 145?",
+      "filters": {},
+      "required": [
+        {
+          "source": "НК_ст145",
+          "contains": "2 миллиона рублей"
+        }
+      ]
+    },
+    {
+      "id": "64",
+      "category": "tax_special_rate",
+      "origin": "manual_open_corpus",
+      "query": "Какая ставка НДС предусмотрена для товаров в таможенной процедуре экспорта по статье 164?",
+      "question": "Какая ставка НДС предусмотрена для товаров в таможенной процедуре экспорта по статье 164?",
+      "filters": {},
+      "required": [
+        {
+          "source": "НК_ст164",
+          "contains": "таможенной процедуре экспорта"
+        }
+      ]
+    },
+    {
+      "id": "65",
+      "category": "tax_progression",
+      "origin": "manual_open_corpus",
+      "query": "Какая ставка НДФЛ предусмотрена при налоговой базе не более 2,4 миллиона рублей в статье 224?",
+      "question": "Какая ставка НДФЛ предусмотрена при налоговой базе не более 2,4 миллиона рублей в статье 224?",
+      "filters": {},
+      "required": [
+        {
+          "source": "НК_ст224",
+          "contains": "2,4 миллиона рублей"
+        }
+      ]
+    },
+    {
+      "id": "66",
+      "category": "tax_general_rate",
+      "origin": "manual_open_corpus",
+      "query": "Какая общая ставка налога на прибыль организаций указана в предоставленной статье 284 НК?",
+      "question": "Какая общая ставка налога на прибыль организаций указана в предоставленной статье 284 НК?",
+      "filters": {},
+      "required": [
+        {
+          "source": "НК_ст284",
+          "contains": "25 процентов"
+        }
+      ]
+    },
+    {
+      "id": "67",
+      "category": "personal_data_liability",
+      "origin": "manual_open_corpus",
+      "query": "Какая ответственность предусмотрена за обработку персональных данных без согласия в письменной форме?",
+      "question": "Какая ответственность предусмотрена за обработку персональных данных без согласия в письменной форме?",
+      "filters": {},
+      "required": [
+        {
+          "source": "КоАП_ст13.11",
+          "contains": "письменной форме"
+        }
+      ]
+    },
+    {
+      "id": "68",
+      "category": "dated_amount",
+      "origin": "manual_open_corpus",
+      "query": "Какой минимальный размер оплаты труда установлен с 1 января 2026 года в предоставленном законе?",
+      "question": "Какой минимальный размер оплаты труда установлен с 1 января 2026 года в предоставленном законе?",
+      "filters": {},
+      "required": [
+        {
+          "source": "МРОТ_ст1",
+          "contains": "27 093"
+        }
+      ]
+    },
+    {
+      "id": "69",
+      "category": "labour_conditions",
+      "origin": "manual_open_corpus",
+      "query": "В каких случаях сверхурочная работа требует письменного согласия работника по статье 99 ТК?",
+      "question": "В каких случаях сверхурочная работа требует письменного согласия работника по статье 99 ТК?",
+      "filters": {},
+      "required": [
+        {
+          "source": "ТК_ст99",
+          "contains": "письменного согласия"
+        }
+      ]
+    },
+    {
+      "id": "70",
+      "category": "tax_aggravation",
+      "origin": "manual_open_corpus",
+      "query": "Что признаётся обстоятельством, отягчающим ответственность за налоговое правонарушение?",
+      "question": "Что признаётся обстоятельством, отягчающим ответственность за налоговое правонарушение?",
+      "filters": {},
+      "required": [
+        {
+          "source": "НК_ст112",
+          "contains": "отягчающим ответственность"
+        }
+      ]
+    },
+    {
+      "id": "71",
+      "category": "tax_exemption",
+      "origin": "manual_open_corpus",
+      "query": "Можно ли отказаться от освобождения от НДС до истечения двенадцати календарных месяцев?",
+      "question": "Можно ли отказаться от освобождения от НДС до истечения двенадцати календарных месяцев?",
+      "filters": {},
+      "required": [
+        {
+          "source": "НК_ст145",
+          "contains": "не вправе отказаться"
+        }
+      ]
+    },
+    {
+      "id": "72",
+      "category": "labour_boundary",
+      "origin": "manual_open_corpus",
+      "query": "Какой предел испытания предусмотрен при трудовом договоре на срок от двух до шести месяцев?",
+      "question": "Какой предел испытания предусмотрен при трудовом договоре на срок от двух до шести месяцев?",
+      "filters": {},
+      "required": [
+        {
+          "source": "ТК_ст70",
+          "contains": "двух недель"
+        }
       ]
     }
-  ]
+  ],
+  "schema_version": 2
 }

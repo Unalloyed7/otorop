@@ -33,16 +33,25 @@ async def audit(data_dir, annotations, *, top_k=12, bundle=False):
         with question_path.open(encoding="utf-8-sig", newline="") as f:
             questions = {r["id"]: r["question"] for r in csv.DictReader(f)}
     rows = []
+    case_ids = [case["id"] for case in annotations["cases"]]
+    if len(case_ids) != len(set(case_ids)):
+        raise ValueError("Повторяющиеся ID сценариев")
     for case in annotations["cases"]:
-        modes = ["annotated"] + (["raw"] if case.get("question_id") in questions else [])
+        if not (case.get("required") or case.get("ineligible") or case.get("expected_candidates")
+                or case.get("applicability_checks")):
+            raise ValueError(f"У сценария {case['id']} нет проверяемых ожиданий")
+        raw_question = case.get("question") or questions.get(case.get("question_id"))
+        modes = ["annotated"] + (["raw"] if raw_question else [])
         for mode in modes:
             filters = SearchFilters.model_validate(case.get("filters", {}) if mode == "annotated" else {})
-            query = case["query"] if mode == "annotated" else questions[case["question_id"]]
+            query = case["query"] if mode == "annotated" else raw_question
+            assembled = None
             if bundle:
-                result = backend.bundle_result(await backend.search_bundle(
+                assembled = await backend.search_bundle(
                     [query], filters, top_k=top_k,
                     max_context_chars=60000, max_context_chunks=top_k * 2,
-                ))
+                )
+                result = backend.bundle_result(assembled)
             else:
                 result = await backend.search(query, filters)
             eligible = [e for e in result.evidence if temporal_issue(e, filters, mode="auto", reference=reference) is None]
@@ -54,6 +63,22 @@ async def audit(data_dir, annotations, *, top_k=12, bundle=False):
                     raise ValueError(f"Разметка не соответствует базе: {case['id']}, {target}")
                 checks.append({**target, "found": bool(ids & gold)})
             unwanted = [e.chunk_id for e in eligible if any(matches(backend.index.get_chunk(e.chunk_id), t) for t in case.get("forbidden", []))]
+            behaviour = []
+            for target in case.get("ineligible", []):
+                raw_found = [e for e in result.evidence if matches(backend.index.get_chunk(e.chunk_id), target)]
+                eligible_found = [e for e in eligible if matches(backend.index.get_chunk(e.chunk_id), target)]
+                behaviour.append({"kind": "historical_edition_unavailable", "target": target,
+                                  "passed": bool(raw_found) and not eligible_found})
+            for target in case.get("applicability_checks", []):
+                matching = [e for e in result.evidence if matches(backend.index.get_chunk(e.chunk_id), target)]
+                statuses = {e.metadata.get("applicability_status") for e in matching}
+                behaviour.append({"kind": "applicability", "target": target,
+                                  "actual_statuses": sorted(str(s) for s in statuses),
+                                  "passed": bool(matching) and statuses == {target["status"]}})
+            if case.get("expected_candidates"):
+                behaviour.append({"kind": "ambiguity", "expected": case["expected_candidates"],
+                                  "actual": result.candidates,
+                                  "passed": set(result.candidates) == set(case["expected_candidates"])})
             original = {"evidence": [e.model_dump(mode="json") for e in eligible]}
             compact, docs, chunks = compact_evidence(original)
             for passage, evidence in zip(compact["evidence"], original["evidence"]):
@@ -63,8 +88,15 @@ async def audit(data_dir, annotations, *, top_k=12, bundle=False):
                 for key in ("text", "section", "document_title", "applicability", "counterparty", "contract_number"):
                     assert restored[key] == evidence[key], key
                 assert restored["metadata"] == {k: v for k, v in evidence["metadata"].items() if k not in {"score", "retrieval_reason"}}
-            rows.append({"id": case["id"], "mode": mode, "checks": checks, "all_required": all(c["found"] for c in checks), "unwanted_ids": unwanted, "passed": all(c["found"] for c in checks) and not unwanted, "evidence_ids": [e.chunk_id for e in result.evidence], "eligible_ids": [e.chunk_id for e in eligible], "payload_before_chars": len(json.dumps(original, ensure_ascii=False)), "payload_after_chars": len(json.dumps(compact, ensure_ascii=False))})
-    return {"reference_date": reference.isoformat(), "evaluation": "offline BM25 source coverage; annotated query is a manual oracle, not model intent; not answer accuracy", "bundle": bundle, "top_k": top_k, "fingerprint": backend.index.fingerprint, "modes": {m: {"cases": sum(r["mode"] == m for r in rows), "all_required": sum(r["mode"] == m and r["all_required"] for r in rows), "passed": sum(r["mode"] == m and r["passed"] for r in rows)} for m in {r["mode"] for r in rows}}, "cases": rows}
+            rows.append({"id": case["id"], "category": case.get("category", "legacy"),
+                         "mode": mode, "checks": checks, "behaviour_checks": behaviour,
+                         "all_required": all(c["found"] for c in checks), "unwanted_ids": unwanted,
+                         "passed": all(c["found"] for c in checks) and not unwanted and all(c["passed"] for c in behaviour),
+                         "recovery_queries": assembled["recovery"]["queries_used"] if assembled else 0,
+                         "coverage": [g["coverage"]["status"] for g in assembled["groups"]] if assembled else [],
+                         "evidence_ids": [e.chunk_id for e in result.evidence], "eligible_ids": [e.chunk_id for e in eligible],
+                         "payload_before_chars": len(json.dumps(original, ensure_ascii=False)), "payload_after_chars": len(json.dumps(compact, ensure_ascii=False))})
+    return {"reference_date": reference.isoformat(), "evaluation": "offline source coverage and retrieval metadata; annotated filters are a manual oracle; raw mode has no intent extraction or date/entity filters; not model answer accuracy", "bundle": bundle, "top_k": top_k, "fingerprint": backend.index.fingerprint, "modes": {m: {"cases": sum(r["mode"] == m for r in rows), "all_required": sum(r["mode"] == m and r["all_required"] for r in rows), "passed": sum(r["mode"] == m and r["passed"] for r in rows)} for m in {r["mode"] for r in rows}}, "cases": rows}
 
 
 def main():
@@ -80,7 +112,8 @@ def main():
     print(json.dumps(result["modes"], ensure_ascii=False))
     for row in result["cases"]:
         if not row["passed"]:
-            print(row["id"], row["mode"], "missing:", [t for t in row["checks"] if not t["found"]], "unwanted:", len(row["unwanted_ids"]))
+            print(row["id"], row["mode"], "missing:", [t for t in row["checks"] if not t["found"]],
+                  "unwanted:", len(row["unwanted_ids"]), "behaviour:", [c for c in row["behaviour_checks"] if not c["passed"]])
 
 
 if __name__ == "__main__":

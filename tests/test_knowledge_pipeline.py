@@ -492,5 +492,7 @@ def test_invalid_llm_quotes_are_not_promoted_to_relations(tmp_path):
         pipeline.llm_candidates([chunk], Client(), max_chunks=1)
     )
     assert candidates == []
-    assert report["status"] == "complete"
+    assert report["status"] == "partial"
+    assert report["remaining_chunks"] == 1
+    assert not report["coverage_complete"]
     pipeline.close()
