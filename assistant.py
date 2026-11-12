@@ -14,7 +14,15 @@ from pydantic import ValidationError
 from llm_client import LLMClient, ModelAPIError, ModelProtocolError, Settings
 from schemas import Answer, Citation, Claim, Draft, Evidence, Intent, Message, ScenarioDates, SearchFilters, SearchResult, SemanticCheck, Verdict
 from temporal import mode_for, period_quoted, temporal_issue
-from date_context import condition_status, equivalent_coverage, governing_span, parse_date_span, range_changes, scenario_for
+from date_context import (
+    condition_status,
+    equivalent_coverage,
+    governing_span,
+    infer_signed_date,
+    parse_date_span,
+    range_changes,
+    scenario_for,
+)
 from execution import BudgetExhausted, RunControl, controlled_run, current_control
 from verification import build_statement, linked_citations, statement_key
 
@@ -567,6 +575,18 @@ class LegalAssistant:
             merged.facts.update(supplied.facts)
             legacy_kind = {"specification_signed_at": "specification_signed", "document_signed": "contract_signed"}.get(filters.date_kind, filters.date_kind)
             filters = filters.model_copy(update={"scenario": merged, "event_date": None if legacy_kind in {"contract_signed", "specification_signed", "delivery", "event"} and getattr(supplied, legacy_kind) is not None else filters.event_date})
+        # Recover only a unique explicit signing date when Intent supplied no date.
+        if when is None and filters.event_date is None and not any(
+            getattr(filters.scenario, kind)
+            for kind in ("contract_signed", "specification_signed", "delivery", "event")
+        ):
+            inferred = infer_signed_date(history[-1].content)
+            if inferred is not None:
+                kind, span = inferred
+                inferred_scenario = filters.scenario.model_copy(deep=True)
+                setattr(inferred_scenario, kind, span)
+                filters = filters.model_copy(update={"scenario": inferred_scenario, "governing_date": kind})
+                _record(trace, "date_recovery", kind=kind, period=span.model_dump(mode="json"))
         if when:
             explicit_dates = filters.scenario.model_copy(deep=True)
             kind = {"specification_signed_at": "specification_signed", "document_signed": "contract_signed"}.get(filters.date_kind, filters.date_kind) or "event"

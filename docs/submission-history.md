@@ -92,3 +92,15 @@
 ```bash
 .venv/bin/python tools/package_submission.py --output dist/psb-submission-v2.zip --with-report --verify-answer 1
 ```
+
+## Узкий кандидат восстановления даты
+
+Кандидат `dist/psb-submission-date-recovery.zip` собран после полного локального прогона: **296 passed**, одно предупреждение Starlette/httpx. Архив размером **97 924 байта**, SHA-256 `88e314f1b10fa5baea4aba2c201905947bb1dbd9aee78dd7f91f7e346b1e573a`. Включены `RUN_REPORT` и `VERIFY_ANSWER=True`.
+
+Побайтовое сравнение с `dist/psb-submission-v2.zip` подтвердило одинаковый список файлов; изменены только `assistant.py` и `date_context.py`. На исходном открытом вопросе №5 разбор интервала «август 2024» вернул п. 2.4 регламента 2023 года и временная проверка исключила неподходящие фрагменты 2025 года. Это локальная проверка поиска, не генерации; балл пока не известен.
+
+Для следующего шага отправить именно этот ZIP на платформу, затем записать только балл и длительность:
+
+```bash
+.venv/bin/python tools/package_submission.py --output dist/psb-submission-date-recovery.zip --with-report --verify-answer 1
+```

@@ -3,10 +3,40 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 import re
+from typing import Literal
 
 from schemas import DateSpan, ScenarioDates, SearchFilters
 
 _MONTHS = ["январ", "феврал", "март", "апрел", "ма", "июн", "июл", "август", "сентябр", "октябр", "ноябр", "декабр"]
+_SignedDateKind = Literal["contract_signed", "specification_signed"]
+_EXPLICIT_DATE = re.compile(
+    r"(?<![\w/-])(?:"
+    r"\d{1,2}\.\d{1,2}\.\d{4}"
+    r"|\d{4}-\d{2}(?:-\d{2})?"
+    r"|\d{1,2}\s+[а-яё]+\s+\d{4}(?:\s*(?:года|году|г\.?))?"
+    r"|(?:в\s+)?[а-яё]+\s+\d{4}(?:\s*(?:года|году|г\.?))?"
+    r"|(?:в\s+)?\d{4}(?:\s*(?:год(?:а|у)?|г\.?))?"
+    r")(?![\w/-])",
+    re.IGNORECASE,
+)
+_SIGNED_DATE_CUES: tuple[tuple[_SignedDateKind, re.Pattern[str]], ...] = (
+    (
+        "specification_signed",
+        re.compile(
+            r"спецификац[а-яё]*[\s\S]{0,80}(?:подпис|заключ)"
+            r"|(?:подпис|заключ)[а-яё]*[\s\S]{0,80}спецификац",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "contract_signed",
+        re.compile(
+            r"(?:договор|контракт)[а-яё]*[\s\S]{0,80}(?:заключ|подпис)"
+            r"|(?:заключ|подпис)[а-яё]*[\s\S]{0,80}(?:договор|контракт)",
+            re.IGNORECASE,
+        ),
+    ),
+)
 
 
 def _month_number(word):
@@ -43,6 +73,28 @@ def parse_date_span(value: str) -> DateSpan:
     else:
         day = date.fromisoformat(text)
     return DateSpan(start=day, end_exclusive=day + timedelta(days=1), precision="day", label=value)
+
+
+def infer_signed_date(text: str) -> tuple[_SignedDateKind, DateSpan] | None:
+    candidates: dict[tuple[_SignedDateKind, date, date, str], tuple[_SignedDateKind, DateSpan]] = {}
+    for match in _EXPLICIT_DATE.finditer(text):
+        try:
+            span = parse_date_span(match.group())
+        except ValueError:
+            continue
+        left = max(text.rfind(separator, 0, match.start()) for separator in ".!?\n") + 1
+        right = len(text)
+        for separator in ".!?\n":
+            position = text.find(separator, match.end())
+            if position >= 0:
+                right = min(right, position)
+        sentence = text[left:right]
+        kinds = [kind for kind, cue in _SIGNED_DATE_CUES if cue.search(sentence)]
+        if len(kinds) == 1:
+            candidates[(kinds[0], span.start, span.end_exclusive, span.precision)] = (kinds[0], span)
+    if len(candidates) != 1:
+        return None
+    return next(iter(candidates.values()))
 
 
 def scenario_for(filters: SearchFilters) -> ScenarioDates:

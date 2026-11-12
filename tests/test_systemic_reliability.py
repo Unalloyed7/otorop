@@ -12,7 +12,7 @@ from diagnostics import capture_run
 from documents import load_documents
 from llm_client import LLMClient, compact_evidence
 from retrieval import create_search
-from schemas import SearchFilters
+from schemas import ScenarioDates, SearchFilters
 from temporal import temporal_issue
 
 
@@ -31,6 +31,22 @@ async def test_only_applicable_policy_survives_search(dated_corpus, when, kind, 
     found = await create_search(dated_corpus).search("одобрение договора директором", SearchFilters(event_date=when, date_kind=kind))
     assert found.evidence
     assert all(expected in e.coordinates.source_path for e in found.evidence)
+
+
+async def test_policy_search_uses_inferred_contract_month(dated_corpus):
+    filters = SearchFilters(
+        scenario=ScenarioDates(contract_signed="август 2024"),
+        governing_date="contract_signed",
+    )
+    found = await create_search(dated_corpus).search("одобрение договора директором", filters)
+    assert found.evidence
+    eligible = [
+        evidence
+        for evidence in found.evidence
+        if temporal_issue(evidence, filters, mode="historical", reference=date(2026, 11, 12)) is None
+    ]
+    assert any("2025" in evidence.coordinates.source_path for evidence in found.evidence)
+    assert eligible and all("2023" in evidence.coordinates.source_path for evidence in eligible)
 
 
 def test_engine_also_blocks_inapplicable_policy_when_backend_did_not(evidence):

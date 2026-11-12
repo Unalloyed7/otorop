@@ -7,7 +7,7 @@ import pytest
 
 from assistant import LegalAssistant, validate_supports, CitationError
 from conftest import FakeClient, FakeSearch, draft, intent
-from date_context import parse_date_span, range_changes
+from date_context import infer_signed_date, parse_date_span, range_changes
 from diagnostics import capture_run
 from llm_client import LLMClient, ModelAPIError
 from schemas import Coordinates, Draft, ScenarioDates, SearchFilters, SearchResult
@@ -31,6 +31,43 @@ def test_date_precision_is_an_interval(value, start, end, precision):
     assert (str(span.start), str(span.end_exclusive), span.precision) == (start, end, precision)
 
 
+@pytest.mark.parametrize(
+    "text,expected_kind,expected_precision,expected_start",
+    [
+        (
+            "Договор на 12 млн рублей заключали в августе 2024 года. Нужно ли одобрение?",
+            "contract_signed",
+            "month",
+            "2024-08-01",
+        ),
+        (
+            "Подписали спецификацию 12.11.2026.",
+            "specification_signed",
+            "day",
+            "2026-11-12",
+        ),
+        (
+            "Договор П-17/2024 заключили в августе 2024 года.",
+            "contract_signed",
+            "month",
+            "2024-08-01",
+        ),
+    ],
+)
+def test_infer_explicit_signed_date(text, expected_kind, expected_precision, expected_start):
+    inferred = infer_signed_date(text)
+    assert inferred is not None
+    kind, span = inferred
+    assert kind == expected_kind
+    assert span.precision == expected_precision
+    assert str(span.start) == expected_start
+
+
+def test_infer_signed_date_skips_ambiguous_dates():
+    text = "Договор заключили в августе 2024 года. Спецификацию подписали в сентябре 2024 года."
+    assert infer_signed_date(text) is None
+
+
 def policy(evidence, year, amount, start=None, end=None):
     text = f"2.4. Договоры свыше {amount} рублей одобряет директор."
     return evidence.model_copy(update={"document_id": f"policy-{year}", "chunk_id": f"policy-{year}:2.4", "contract_number": None,
@@ -50,6 +87,35 @@ async def test_same_rule_during_month_does_not_require_a_day(settings, evidence)
     assert answer.status == "answer" and "Уточните" not in answer.text
     assert answer.scenario.contract_signed.precision == "month"
     assert answer.statements[0].check.status == "confirmed"
+
+
+async def test_explicit_contract_date_fills_missing_intent_date(settings):
+    client = FakeClient(settings, intent(filters=SearchFilters()))
+    search = FakeSearch()
+    answer = await LegalAssistant(search, client).answer(
+        "Договор на 12 млн рублей заключали в августе 2024 года. Нужно ли было одобрение генерального директора?"
+    )
+    assert answer.status == "insufficient"
+    filters = search.requests[0][1]
+    span = filters.scenario.contract_signed
+    assert span is not None
+    assert (span.start, span.end_exclusive, span.precision) == (
+        date(2024, 8, 1),
+        date(2024, 9, 1),
+        "month",
+    )
+    assert filters.governing_date == "contract_signed"
+    assert answer.scenario.contract_signed == span
+
+
+async def test_explicit_contract_date_does_not_replace_intent_scenario(settings):
+    scenario = ScenarioDates(contract_signed="2024-07")
+    client = FakeClient(settings, intent(filters=SearchFilters(scenario=scenario, governing_date="contract_signed")))
+    search = FakeSearch()
+    await LegalAssistant(search, client).answer(
+        "Договор заключали в августе 2024 года. Нужно ли было одобрение генерального директора?"
+    )
+    assert search.requests[0][1].scenario.contract_signed == scenario.contract_signed
 
 
 async def test_changed_rule_inside_range_requires_clarification(settings, evidence):
