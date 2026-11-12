@@ -2,6 +2,36 @@
   "contract_number": "Т-1/2026",
   "counterparty": "Тестовый поставщик",
   "document_id": null,
-  "event_date": "2026-02-01",
-  "date_kind": "event"
+  "event_date": null,
+  "date_kind": null,
+  "scenario": {
+    "contract_signed": {
+      "start": "2026-01-01",
+      "end_exclusive": "2026-02-01",
+      "precision": "month",
+      "label": "2026-01"
+    },
+    "specification_signed": {
+      "start": "2026-10-02",
+      "end_exclusive": "2026-10-03",
+      "precision": "day",
+      "label": "2026-10-02"
+    },
+    "delivery": {
+      "start": "2026-11-10",
+      "end_exclusive": "2026-11-11",
+      "precision": "day",
+      "label": "2026-11-10"
+    },
+    "event": {
+      "start": "2026-11-01",
+      "end_exclusive": "2026-12-01",
+      "precision": "month",
+      "label": "2026-11"
+    },
+    "facts": {}
+  },
+  "governing_date": "event",
+  "purpose": "grounds",
+  "anchor_document_ids": []
 }

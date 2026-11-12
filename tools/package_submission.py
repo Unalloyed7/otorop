@@ -6,7 +6,7 @@ from pathlib import Path
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULES = ("schemas.py", "llm_client.py", "assistant.py", "search_adapter.py", "documents.py", "retrieval.py", "temporal.py", "diagnostics.py", "solution.py")
+MODULES = ("schemas.py", "llm_client.py", "assistant.py", "search_adapter.py", "documents.py", "retrieval.py", "temporal.py", "date_context.py", "execution.py", "verification.py", "diagnostics.py", "solution.py")
 
 
 def package(output: Path, *, root: Path = ROOT, extra_modules: tuple[str, ...] = (), with_report=False, verify_answer: bool | None = None) -> Path:

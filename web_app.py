@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
@@ -16,7 +17,7 @@ from pydantic import Field, model_validator
 
 from assistant import LegalAssistant, parse_messages
 from llm_client import LLMClient, ModelAPIError, Settings
-from schemas import Answer, Message, Model
+from schemas import Answer, Message, Model, ScenarioDates
 from search_adapter import build_search
 
 log = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ MAX_BODY_BYTES = 300_000
 class ChatRequest(Model):
     messages: list[Message] = Field(min_length=1, max_length=40)
     as_of: date | None = None
+    scenario: ScenarioDates | None = None
 
     @model_validator(mode="after")
     def valid_history(self):
@@ -48,7 +50,8 @@ class BodyLimit:
             if event["type"] == "http.disconnect":
                 return
             data.extend(event.get("body", b""))
-            if len(data) > MAX_BODY_BYTES:
+            maximum = 8_000_000 if scope.get("path") == "/api/runs/import" else MAX_BODY_BYTES
+            if len(data) > maximum:
                 return await JSONResponse({"detail": "Слишком большой запрос."}, status_code=413)(scope, receive, send)
             if not event.get("more_body", False):
                 break
@@ -77,11 +80,12 @@ def _document_summary(document: dict) -> dict:
     )} | {"char_count": len(document.get("text", ""))}
 
 
-def create_app(*, engine: Any = None, backend: Any = None) -> FastAPI:
+def create_app(*, engine: Any = None, backend: Any = None, state_path=None) -> FastAPI:
     """Явная инъекция компонентов — для тестов; рабочий запуск использует общий factory."""
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         client = None
+        process_lock = None
         app.state.backend = backend
         app.state.engine = engine
         app.state.model_configured = engine is not None
@@ -107,12 +111,33 @@ def create_app(*, engine: Any = None, backend: Any = None) -> FastAPI:
                     app.state.engine = LegalAssistant(app.state.backend, client)
             elif app.state.backend is None:
                 app.state.backend = getattr(engine, "search", None)
+            from workbench import JobManager, Store
+            path = state_path
+            if path is None:
+                path = ":memory:" if engine is not None or backend is not None else Path(os.environ.get("WEB_STATE_DIR", str(Path(__file__).resolve().parent / ".state"))) / "workbench.sqlite"
+            if str(path) != ":memory:":
+                import fcntl
+                Path(path).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                process_lock = open(str(path) + ".lock", "a")
+                try:
+                    fcntl.flock(process_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    process_lock.close()
+                    raise RuntimeError("Для одной БД рабочего места поддерживается один процесс uvicorn") from None
+            app.state.job_manager = JobManager(Store(path), app.state.engine, workers=min(4, max(1, app.state.capacity // 2)), capacity=app.state.capacity)
+            await app.state.job_manager.start()
             yield
         finally:
+            manager = getattr(app.state, "job_manager", None)
+            if manager:
+                await manager.close()
+                manager.store.db.close()
+            if process_lock:
+                process_lock.close()
             if client is not None:
                 await client.aclose()
 
-    app = FastAPI(title="ПСБ · Юридический ассистент", version="0.2.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url="/api/openapi.json")
+    app = FastAPI(title="ПСБ · Юридический ассистент", version="0.3.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url="/api/openapi.json")
     app.add_middleware(BodyLimit)
 
     @app.middleware("http")
@@ -162,7 +187,10 @@ def create_app(*, engine: Any = None, backend: Any = None) -> FastAPI:
             return JSONResponse({"detail": "Сервис занят. Повторите запрос немного позже."}, status_code=429, headers={"Retry-After": "3"})
         app.state.pending += 1
         try:
-            return await app.state.engine.answer(body.messages, as_of=body.as_of)
+            kwargs = {"as_of": body.as_of}
+            if body.scenario is not None:
+                kwargs["scenario"] = body.scenario
+            return await app.state.engine.answer(body.messages, **kwargs)
         finally:
             app.state.pending -= 1
 
@@ -217,6 +245,8 @@ def create_app(*, engine: Any = None, backend: Any = None) -> FastAPI:
     async def index():
         return FileResponse(WEB_DIR / "index.html")
 
+    from workbench import install_routes
+    install_routes(app)
     app.mount("/assets", StaticFiles(directory=WEB_DIR), name="assets")
     return app
 

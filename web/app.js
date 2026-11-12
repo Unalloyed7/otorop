@@ -5,10 +5,22 @@
   const shell = document.querySelector(".app-shell");
   const storageKey = "psb-legal-conversations-v1";
   const statusLabels = {
-    answer: "Ответ с основаниями", partial: "Подтверждена часть", clarify: "Нужно уточнение",
-    insufficient: "Недостаточно оснований", out_of_scope: "Вне тематики", refuse: "Отказ", error: "Техническая ошибка",
+    answer: "Ответ с основаниями",
+    partial: "Подтверждена часть",
+    clarify: "Нужно уточнение",
+    insufficient: "Недостаточно оснований",
+    out_of_scope: "Вне тематики",
+    refuse: "Отказ",
+    error: "Техническая ошибка",
   };
-  const typeLabels = { agreement: "Договор", amendment: "Допсоглашение", internal_policy: "Регламент", letter: "Письмо / записка", law: "Законодательство", other: "Документ" };
+  const typeLabels = {
+    agreement: "Договор",
+    amendment: "Допсоглашение",
+    internal_policy: "Регламент",
+    letter: "Письмо / записка",
+    law: "Законодательство",
+    other: "Документ"
+  };
   let conversations = [];
   let activeId = null;
   let busy = false;
@@ -26,34 +38,58 @@
     if (text !== undefined) node.textContent = text;
     return node;
   }
+
   function toast(text) {
     $("toast").textContent = text;
     $("toast").hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { $("toast").hidden = true; }, 3500);
+    toastTimer = setTimeout(() => {
+      $("toast").hidden = true;
+    }, 3500);
   }
-  function current() { return conversations.find((c) => c.id === activeId); }
+
+  function current() {
+    return conversations.find((c) => c.id === activeId);
+  }
+
   function persist() {
-    try { sessionStorage.setItem(storageKey, JSON.stringify({ activeId, conversations })); }
-    catch { /* Память вкладки остаётся доступной и при ограничении storage. */ }
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify({
+        activeId,
+        conversations
+      }));
+    } catch {
+      /* Память вкладки остаётся доступной и при ограничении storage. */ }
   }
+
   function restore() {
     try {
       const data = JSON.parse(sessionStorage.getItem(storageKey) || "null");
       if (data && Array.isArray(data.conversations)) {
-        conversations = data.conversations.filter((c) => typeof c.id === "string" && typeof c.title === "string" && Array.isArray(c.messages) && c.messages.length <= 40 && c.messages.every((m) => ["user", "assistant"].includes(m.role) && typeof m.content === "string")).slice(0, 15);
+        conversations = data.conversations.filter((c) => typeof c.id === "string" && typeof c.title ===
+          "string" && Array.isArray(c.messages) && c.messages.length <= 40 && c.messages.every((m) => [
+            "user", "assistant"
+          ].includes(m.role) && typeof m.content === "string")).slice(0, 15);
         activeId = conversations.some((c) => c.id === data.activeId) ? data.activeId : conversations[0]?.id;
       }
-    } catch { conversations = []; }
+    } catch {
+      conversations = [];
+    }
     if (!activeId) newConversation();
   }
+
   function newConversation() {
     if (busy) return;
     const empty = conversations.find((c) => c.messages.length === 0);
     if (empty) activeId = empty.id;
     else {
       const id = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const c = { id, title: "Новый диалог", messages: [], asOf: "" };
+      const c = {
+        id,
+        title: "Новый диалог",
+        messages: [],
+        asOf: ""
+      };
       conversations.unshift(c);
       conversations = conversations.slice(0, 15);
       activeId = c.id;
@@ -64,6 +100,7 @@
     render();
     persist();
   }
+
   function renderSidebar() {
     const list = $("conversation-list");
     list.replaceChildren();
@@ -83,6 +120,7 @@
       list.append(button);
     }
   }
+
   function formatText(node, text, citations) {
     // Никакого HTML/Markdown из ответа или исходника. Только текст и наши кнопки.
     const regex = /\[(\d+)\]/g;
@@ -101,19 +139,41 @@
     }
     node.append(document.createTextNode(text.slice(start)));
   }
+
   function renderMessage(message, index) {
     const node = element("article", "message message-" + message.role);
     if (message.role === "user") {
       node.append(element("div", "message-text", message.content));
       return node;
     }
-    const answer = message.answer || { status: "error", text: message.content, citations: [] };
+    const answer = message.answer || {
+      status: "error",
+      text: message.content,
+      citations: []
+    };
     const label = element("div", "message-label");
-    label.append(element("span", "assistant-avatar", "▤"), document.createTextNode("АССИСТЕНТ ПСБ"), element("span", "message-status " + answer.status, statusLabels[answer.status] || "Ответ"));
+    label.append(element("span", "assistant-avatar", "▤"), document.createTextNode("АССИСТЕНТ ПСБ"),
+      element("span", "message-status " + answer.status, message.jobState === "cancelled" ? "Отменено" :
+        statusLabels[answer.status] || "Ответ"));
     const text = element("div", "message-text");
     const citations = Array.isArray(answer.citations) ? answer.citations : [];
     formatText(text, message.content, citations);
     node.append(label, text);
+    if (answer.statements?.length) {
+      const statements = element("section", "statement-list");
+      statements.setAttribute("aria-label", "Проверяемые утверждения");
+      for (const statement of answer.statements) statements.append(LegalWorkbench.statementCard(statement, {
+        openCitation,
+        recheck: () => sendQuestion(true)
+      }));
+      node.append(statements);
+    }
+    if (message.sourceDiff) node.append(element("p", "source-diff", message.sourceDiff));
+    if (message.sourceChanges?.length) {
+      const changes = element("ul", "source-changes");
+      for (const item of message.sourceChanges) changes.append(element("li", "", item));
+      node.append(changes);
+    }
     if (citations.length) {
       node.append(element("div", "evidence-heading", `ОСНОВАНИЯ · ${citations.length}`));
       const cards = element("div", "citations");
@@ -121,8 +181,10 @@
         const button = element("button", "citation-card");
         button.type = "button";
         const body = element("span", "citation-body");
-        body.append(element("span", "citation-title", c.document_title), element("span", "citation-meta", c.section + " · " + c.edition), element("span", "citation-quote", "«" + c.quote + "»"));
-        button.append(element("span", "citation-number", String(c.claim_index + 1).padStart(2, "0")), body, element("span", "citation-arrow", "↗"));
+        body.append(element("span", "citation-title", c.document_title), element("span", "citation-meta", c
+          .section + " · " + c.edition), element("span", "citation-quote", "«" + c.quote + "»"));
+        button.append(element("span", "citation-number", String(c.claim_index + 1).padStart(2, "0")), body,
+          element("span", "citation-arrow", "↗"));
         button.addEventListener("click", () => openCitation(c));
         cards.append(button);
       }
@@ -132,11 +194,33 @@
     const copy = element("button", "text-button", "Скопировать ответ");
     copy.type = "button";
     copy.addEventListener("click", async () => {
-      const sources = citations.map((c) => `${c.document_title}, ${c.section} (${c.edition}). «${c.quote}»`).join("\n");
-      try { await navigator.clipboard.writeText(message.content + (sources ? "\n\nОснования:\n" + sources : "")); toast("Ответ скопирован вместе с основаниями"); }
-      catch { toast("Не удалось скопировать. Выделите текст ответа вручную."); }
+      const sources = citations.map((c) =>
+        `${c.document_title}, ${c.section} (${c.edition}). «${c.quote}»`).join("\n");
+      try {
+        await navigator.clipboard.writeText(message.content + (sources ? "\n\nОснования:\n" +
+          sources : ""));
+        toast("Ответ скопирован вместе с основаниями");
+      } catch {
+        toast("Не удалось скопировать. Выделите текст ответа вручную.");
+      }
     });
     actions.append(copy);
+    if (message.jobId) actions.append(element("span", "job-reference", "Задание " + message.jobId.slice(0,
+      8)), (() => {
+      const b = element("button", "text-button", "Сохранить запуск для сравнения");
+      b.type = "button";
+      b.addEventListener("click", async () => {
+        try {
+          await request(`/api/jobs/${message.jobId}/save-run`, {
+            method: "POST"
+          });
+          toast("Запуск сохранён в панели сравнения");
+        } catch (e) {
+          toast(e.message);
+        }
+      });
+      return b;
+    })());
     if (answer.status === "error" && index === current().messages.length - 1) {
       const retry = element("button", "text-button retry-button", "Повторить запрос");
       retry.type = "button";
@@ -146,30 +230,56 @@
     node.append(actions);
     return node;
   }
+
   function render() {
     renderSidebar();
     const c = current();
     $("as-of").value = c.asOf || "";
+    LegalWorkbench.writeScenario(c.scenario || {});
     $("welcome").hidden = c.messages.length > 0;
     $("messages").hidden = c.messages.length === 0;
     $("messages").replaceChildren(...c.messages.map(renderMessage));
     updateControls();
   }
+
   function updateControls() {
     $("new-chat").disabled = busy;
     $("send-button").disabled = busy || !serviceReady || !$("question").value.trim();
     $("question").disabled = busy;
     $("as-of").disabled = busy;
+    for (const field of document.querySelectorAll(".scenario-settings input,.scenario-settings select"))
+      field.disabled = busy;
+    $("recheck-scenario").disabled = busy || !serviceReady || !current().messages.some(m => m.role ===
+      "user");
     $("chat-form").setAttribute("aria-busy", String(busy));
     for (const button of document.querySelectorAll(".suggestion")) button.disabled = busy;
   }
-  function scrollToEnd() { $("chat-area").scrollTop = $("chat-area").scrollHeight; }
+
+  function scrollToEnd() {
+    $("chat-area").scrollTop = $("chat-area").scrollHeight;
+  }
   async function request(url, options = {}) {
-    const response = await fetch(url, { ...options, headers: { ...options.headers }, cache: "no-store" });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    let response;
+    try {
+      response = await fetch(url, {
+        ...options,
+        signal: options.signal || controller.signal,
+        headers: {
+          ...options.headers
+        },
+        cache: "no-store"
+      });
+    } finally {
+      clearTimeout(timer);
+    }
     if (!response.ok) {
       if (response.status === 429) throw new Error("Сервис занят. Повторите запрос немного позже.");
-      if (response.status === 404) throw new Error("Документ или фрагмент больше не найден в текущей базе.");
-      if (response.status === 422 || response.status === 413) throw new Error("Запрос слишком длинный или его формат не поддерживается. Начните новый диалог.");
+      if (response.status === 404) throw new Error(
+        "Документ или фрагмент больше не найден в текущей базе.");
+      if (response.status === 422 || response.status === 413) throw new Error(
+        "Запрос слишком длинный или его формат не поддерживается. Начните новый диалог.");
       throw new Error("Не удалось связаться с сервисом. Проверьте подключение и повторите запрос.");
     }
     return response.json();
@@ -177,6 +287,7 @@
   async function sendQuestion(retry = false) {
     if (busy || !serviceReady) return;
     const c = current();
+    const previousAnswer = c.messages.filter(m => m.answer).at(-1)?.answer;
     if (retry) {
       const lastUser = c.messages.map((m) => m.role).lastIndexOf("user");
       if (lastUser < 0) return;
@@ -184,59 +295,202 @@
     } else {
       const question = $("question").value.trim();
       if (!question) return;
-      if (c.messages.length >= 39 || c.messages.reduce((n, m) => n + m.content.length, 0) + question.length > 58000) {
+      if (c.messages.length >= 39 || c.messages.reduce((n, m) => n + m.content.length, 0) + question
+        .length > 58000) {
         toast("Диалог стал слишком длинным. Начните новый диалог.");
         return;
       }
-      c.messages.push({ role: "user", content: question });
-      if (c.messages.length === 1) c.title = question.length > 55 ? question.slice(0, 54) + "…" : question;
+      c.messages.push({
+        role: "user",
+        content: question
+      });
+      if (c.messages.length === 1) c.title = question.length > 55 ? question.slice(0, 54) + "…" :
+      question;
       c.asOf = $("as-of").value;
       $("question").value = "";
       $("question").style.height = "auto";
     }
+    c.scenario = LegalWorkbench.readScenario();
+    c.job = {
+      key: crypto.randomUUID(),
+      id: null,
+      comparePrevious: !!previousAnswer,
+      previousSources: previousAnswer?.citations || [],
+      payload: {
+        messages: c.messages.map(({
+          role,
+          content
+        }) => ({
+          role,
+          content
+        })),
+        as_of: c.asOf || null,
+        scenario: c.scenario
+      }
+    };
+    persist();
+    await watchJob(c);
+  }
+  async function watchJob(c) {
+    if (!c.job) return;
     busy = true;
     render();
     const loading = element("div", "loading-message");
     const dots = element("span", "loading-dots");
     for (let i = 0; i < 3; i++) dots.append(element("i"));
-    loading.append(dots, document.createTextNode("Проверяю вопрос по базе документов…"));
+    const progress = element("span", "job-progress", "В очереди…");
+    const cancel = element("button", "text-button", "Отменить");
+    cancel.type = "button";
+    const sources = element("div", "job-sources");
+    loading.append(dots, progress, cancel, sources);
     loading.setAttribute("role", "status");
     $("messages").append(loading);
     scrollToEnd();
-    let answer;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 275000);
-    try {
-      answer = await request("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal, body: JSON.stringify({ messages: c.messages.map(({ role, content }) => ({ role, content })), as_of: c.asOf || null }) });
-      if (!answer || typeof answer.text !== "string" || !statusLabels[answer.status]) throw new Error("Сервис вернул ответ в неизвестном формате. Повторите запрос.");
-    } catch (error) {
-      answer = { status: "error", text: error.name === "AbortError" ? "Истекло время ожидания ответа. Попробуйте повторить запрос." : error.message, citations: [], missing_info: [] };
-    } finally { clearTimeout(timeout); }
-    c.messages.push({ role: "assistant", content: answer.text, answer });
+    let cancelling = false;
+    cancel.addEventListener("click", () => {
+      cancelling = true;
+      cancel.disabled = true;
+      progress.textContent = "Отменяем задание…";
+    });
+    let answer, jobId, jobState;
+    while (c.job) {
+      try {
+        const job = c.job;
+        if (!job.id) {
+          const created = await request("/api/jobs", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              ...job.payload,
+              idempotency_key: job.key
+            })
+          });
+          job.id = created.job_id;
+          persist();
+        }
+        const state = await request(`/api/jobs/${job.id}` + (cancelling ? "/cancel" : ""), cancelling ? {
+          method: "POST"
+        } : {});
+        progress.textContent = ({
+          queued: "В очереди",
+          searching: "Поиск оснований и ограничений",
+          checking: "Проверка утверждений",
+          ready: "Готово",
+          error: "Ошибка",
+          cancelled: "Отменено"
+        })[state.state] || "Обработка";
+        sources.replaceChildren();
+        const found = new Map((state.events || []).flatMap(e => e.sources || []).map(e => [e.chunk_id,
+          e]));
+        if (found.size) {
+          sources.append(element("p", "", "Найденные источники — вывод ещё проверяется"));
+          for (const source of [...found.values()].slice(-6)) {
+            const b = element("button", "text-button", source.document_title + ", " + source.section);
+            b.type = "button";
+            b.addEventListener("click", async () => {
+              try {
+                const data = await request(`/api/chunks/${source.chunk_id}`);
+                openCitation({
+                  ...source,
+                  quote: data.chunk.text,
+                  edition: "Источник поиска",
+                  coordinates: {
+                    char_start: data.chunk.start_char,
+                    char_end: data.chunk.end_char
+                  }
+                });
+              } catch (e) {
+                toast(e.message);
+              }
+            });
+            sources.append(b);
+          }
+        }
+        if (state.state === "cancelled") {
+          jobState = "cancelled";
+          answer = {
+            status: "error",
+            text: "Задание отменено. Непроверенный ответ не опубликован.",
+            citations: []
+          };
+          break;
+        }
+        if (["ready", "error"].includes(state.state)) {
+          answer = state.answer;
+          jobId = job.id;
+          break;
+        }
+      } catch (error) {
+        progress.textContent = "Связь прервана. Восстанавливаем показ того же задания…";
+        if (/формат|длинный|Ключ|не найден/.test(error.message)) {
+          answer = {
+            status: "error",
+            text: error.message,
+            citations: []
+          };
+          break;
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    if (!answer || typeof answer.text !== "string") answer = {
+      status: "error",
+      text: "Не удалось получить проверенный ответ.",
+      citations: []
+    };
+    const oldSources = new Set((c.job?.previousSources || []).map(s => s.chunk_id)),
+      newSources = new Set((answer.citations || []).map(s => s.chunk_id));
+    const sourceDiff = c.job?.comparePrevious ?
+      `Основания относительно прошлого ответа: добавлено ${[...newSources].filter(id=>!oldSources.has(id)).length}, убрано ${[...oldSources].filter(id=>!newSources.has(id)).length}.` :
+      null;
+    const sourceChanges = c.job?.comparePrevious ? [...(answer.citations || []).filter(s => !oldSources
+      .has(s.chunk_id)).map(s => "Добавлено: " + s.document_title + ", " + s.section), ...(c.job
+      .previousSources || []).filter(s => !newSources.has(s.chunk_id)).map(s => "Убрано: " + s
+      .document_title + ", " + s.section)] : [];
+    c.messages.push({
+      role: "assistant",
+      content: answer.text,
+      answer,
+      jobId,
+      jobState,
+      sourceDiff,
+      sourceChanges
+    });
+    c.job = null;
     busy = false;
     persist();
     render();
     scrollToEnd();
-    $("question").focus({ preventScroll: true });
+    $("question").focus({
+      preventScroll: true
+    });
   }
   async function refreshStatus() {
     try {
       const status = await request("/api/status");
       serviceReady = status.ready;
       $("service-status").classList.toggle("unavailable", !status.ready);
-      $("service-status-text").textContent = status.ready ? "Готов к работе" : (status.documents_available ? "Документы доступны" : "Требуется подключение");
-      $("document-count").textContent = status.documents_available ? `${status.document_count} в базе знаний` : "База пока недоступна";
+      $("service-status-text").textContent = status.ready ? "Готов к работе" : (status
+        .documents_available ? "Документы доступны" : "Требуется подключение");
+      $("document-count").textContent = status.documents_available ?
+        `${status.document_count} в базе знаний` : "База пока недоступна";
       $("service-notice").hidden = status.ready;
-      $("service-notice").textContent = !status.documents_available ? "База документов пока недоступна. После её подключения можно будет просматривать источники и задавать вопросы." : "Модель пока не подключена. Вы можете открыть и изучить документы базы знаний.";
+      $("service-notice").textContent = !status.documents_available ?
+        "База документов пока недоступна. После её подключения можно будет просматривать источники и задавать вопросы." :
+        "Модель пока не подключена. Вы можете открыть и изучить документы базы знаний.";
     } catch {
       serviceReady = false;
       $("service-status").classList.add("unavailable");
       $("service-status-text").textContent = "Нет соединения";
       $("service-notice").hidden = false;
-      $("service-notice").textContent = "Не удалось подключиться к сервису. Обновите страницу немного позже.";
+      $("service-notice").textContent =
+        "Не удалось подключиться к сервису. Обновите страницу немного позже.";
     }
     updateControls();
   }
+
   function updatePanelMode() {
     const modal = !$("document-panel").hidden && window.innerWidth <= 1000;
     if (modal) {
@@ -249,15 +503,24 @@
     $("main-area").inert = modal || $("sidebar").classList.contains("open");
     $("sidebar").inert = modal;
   }
+
   function setPanel(open) {
-    if (open) { closeSidebar(); panelFocus = document.activeElement; }
+    if (open) {
+      closeSidebar();
+      panelFocus = document.activeElement;
+    }
     $("document-panel").hidden = !open;
     shell.classList.toggle("panel-open", open);
     $("sources-toggle").setAttribute("aria-expanded", String(open));
     updatePanelMode();
     if (open) $("close-panel").focus();
-    else if (panelFocus && document.contains(panelFocus) && panelFocus.getClientRects().length) panelFocus.focus({ preventScroll: true });
-    else $("sources-toggle").focus({ preventScroll: true });
+    else if (panelFocus && document.contains(panelFocus) && panelFocus.getClientRects().length) panelFocus
+      .focus({
+        preventScroll: true
+      });
+    else $("sources-toggle").focus({
+      preventScroll: true
+    });
   }
   async function openLibrary() {
     setPanel(true);
@@ -272,11 +535,15 @@
       documents = result.documents;
       documentsLoaded = true;
       renderDocuments();
-    } catch (error) { $("document-list").replaceChildren(element("p", "empty-list", error.message)); }
+    } catch (error) {
+      $("document-list").replaceChildren(element("p", "empty-list", error.message));
+    }
   }
+
   function renderDocuments() {
     const query = $("document-query").value.toLocaleLowerCase("ru");
-    const rows = documents.filter((d) => [d.title, d.source_file, d.contract_number, d.counterparty].filter(Boolean).join(" ").toLocaleLowerCase("ru").includes(query));
+    const rows = documents.filter((d) => [d.title, d.source_file, d.contract_number, d.counterparty].filter(
+      Boolean).join(" ").toLocaleLowerCase("ru").includes(query));
     const list = $("document-list");
     list.replaceChildren();
     if (!rows.length) list.append(element("p", "empty-list", "Документов с таким названием не найдено."));
@@ -284,13 +551,17 @@
       const button = element("button", "document-item");
       button.type = "button";
       const body = element("span", "document-item-content");
-      body.append(element("span", "document-item-title", d.title), element("span", "document-item-meta", [typeLabels[d.document_type] || "Документ", d.edition ? "ред. " + d.edition : d.contract_number].filter(Boolean).join(" · ")));
+      body.append(element("span", "document-item-title", d.title), element("span", "document-item-meta", [
+        typeLabels[d.document_type] || "Документ", d.edition ? "ред. " + d.edition : d.contract_number
+      ].filter(Boolean).join(" · ")));
       button.append(element("span", "document-item-icon", "▤"), body);
       button.addEventListener("click", () => openDocument(d.document_id));
       list.append(button);
     }
   }
-  async function openCitation(citation) { return openDocument(citation.document_id, citation); }
+  async function openCitation(citation) {
+    return openDocument(citation.document_id, citation);
+  }
   async function openDocument(id, citation = null) {
     setPanel(true);
     const token = ++documentToken;
@@ -308,30 +579,42 @@
     try {
       const [doc, chunkResult] = await Promise.all([
         request("/api/documents/" + encodeURIComponent(id)),
-        citation ? request("/api/chunks/" + encodeURIComponent(citation.chunk_id)) : Promise.resolve(null),
+        citation ? request("/api/chunks/" + encodeURIComponent(citation.chunk_id)) : Promise.resolve(
+          null),
       ]);
       if (token !== documentToken) return;
       $("document-title").textContent = doc.title;
       $("document-type").textContent = typeLabels[doc.document_type] || "Документ";
-      $("document-meta").textContent = [citation?.section, citation?.edition || (doc.edition ? "Редакция от " + doc.edition : null), doc.source_file].filter(Boolean).join(" · ");
+      $("document-meta").textContent = [citation?.section, citation?.edition || (doc.edition ?
+        "Редакция от " + doc.edition : null), doc.source_file].filter(Boolean).join(" · ");
       const download = $("download-document");
       download.hidden = false;
       download.href = "/api/documents/" + encodeURIComponent(id) + "/download";
       if (citation) {
         // Контракт задаёт Unicode code points; JS slice по UTF-16 здесь неверен.
         const chars = Array.from(doc.text);
-        const { char_start: start, char_end: end } = citation.coordinates;
+        const {
+          char_start: start,
+          char_end: end
+        } = citation.coordinates;
         const chunk = chunkResult.chunk;
-        const valid = chunk.document_id === id && Number.isInteger(start) && Number.isInteger(end) && start >= chunk.start_char && end <= chunk.end_char && start < end && chars.slice(start, end).join("") === citation.quote;
+        const valid = chunk.document_id === id && Number.isInteger(start) && Number.isInteger(end) &&
+          start >= chunk.start_char && end <= chunk.end_char && start < end && chars.slice(start, end)
+          .join("") === citation.quote;
         if (valid) {
           quoteMark = element("mark", "", chars.slice(start, end).join(""));
-          $("document-text").append(document.createTextNode(chars.slice(0, start).join("")), quoteMark, document.createTextNode(chars.slice(end).join("")));
+          $("document-text").append(document.createTextNode(chars.slice(0, start).join("")), quoteMark,
+            document.createTextNode(chars.slice(end).join("")));
           $("jump-to-quote").hidden = false;
-          requestAnimationFrame(() => quoteMark?.scrollIntoView({ block: "center", behavior: "instant" }));
+          requestAnimationFrame(() => quoteMark?.scrollIntoView({
+            block: "center",
+            behavior: "instant"
+          }));
         } else {
           $("document-text").textContent = doc.text;
           $("document-message").hidden = false;
-          $("document-message").textContent = "Цитата не совпала с текущим текстом. Проверьте документ вручную: база могла обновиться.";
+          $("document-message").textContent =
+            "Цитата не совпала с текущим текстом. Проверьте документ вручную: база могла обновиться.";
         }
       } else {
         $("document-text").textContent = doc.text;
@@ -344,6 +627,7 @@
       $("document-message").textContent = error.message;
     }
   }
+
   function closeSidebar() {
     $("sidebar").classList.remove("open");
     $("sidebar-backdrop").hidden = true;
@@ -351,26 +635,63 @@
     updatePanelMode();
   }
   $("new-chat").addEventListener("click", newConversation);
-  $("chat-form").addEventListener("submit", (event) => { event.preventDefault(); sendQuestion(); });
+  $("diagnostics-button").addEventListener("click", () => {
+    closeSidebar();
+    LegalWorkbench.openDiagnostics();
+  });
+  $("recheck-scenario").addEventListener("click", () => sendQuestion(true));
+  for (const field of document.querySelectorAll(".scenario-settings input,.scenario-settings select")) field
+    .addEventListener("change", () => {
+      current().scenario = LegalWorkbench.readScenario();
+      if ($("scenario-event").value) {
+        current().asOf = "";
+        $("as-of").value = "";
+      }
+      persist();
+    });
+  $("chat-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    sendQuestion();
+  });
   $("question").addEventListener("input", () => {
     $("question").style.height = "auto";
     $("question").style.height = Math.min($("question").scrollHeight, 150) + "px";
     updateControls();
   });
   $("question").addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.isComposing && !window.matchMedia("(pointer: coarse)").matches) {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing && !window.matchMedia(
+        "(pointer: coarse)").matches) {
       event.preventDefault();
       sendQuestion();
     }
   });
-  $("as-of").addEventListener("change", () => { current().asOf = $("as-of").value; persist(); });
-  for (const suggestion of document.querySelectorAll(".suggestion")) suggestion.addEventListener("click", () => { $("question").value = suggestion.dataset.question; $("question").focus(); updateControls(); });
-  $("sources-toggle").addEventListener("click", () => $("document-panel").hidden ? openLibrary() : setPanel(false));
+  $("as-of").addEventListener("change", () => {
+    current().asOf = $("as-of").value;
+    if ($("as-of").value) {
+      $("scenario-event").value = "";
+      current().scenario = LegalWorkbench.readScenario();
+    }
+    persist();
+  });
+  for (const suggestion of document.querySelectorAll(".suggestion")) suggestion.addEventListener("click",
+  () => {
+      $("question").value = suggestion.dataset.question;
+      $("question").focus();
+      updateControls();
+    });
+  $("sources-toggle").addEventListener("click", () => $("document-panel").hidden ? openLibrary() : setPanel(
+    false));
   $("library-button").addEventListener("click", openLibrary);
-  $("close-panel").addEventListener("click", () => { documentToken++; setPanel(false); });
+  $("close-panel").addEventListener("click", () => {
+    documentToken++;
+    setPanel(false);
+  });
   $("back-to-library").addEventListener("click", openLibrary);
   $("document-query").addEventListener("input", renderDocuments);
-  $("jump-to-quote").addEventListener("click", () => quoteMark?.scrollIntoView({ block: "center", behavior: "smooth" }));
+  $("jump-to-quote").addEventListener("click", () => quoteMark?.scrollIntoView({
+    block: "center",
+    behavior: "smooth"
+  }));
   $("menu-button").addEventListener("click", () => {
     $("sidebar").classList.add("open");
     $("sidebar-backdrop").hidden = false;
@@ -379,21 +700,40 @@
     $("new-chat").focus();
   });
   $("sidebar-backdrop").addEventListener("click", closeSidebar);
-  window.addEventListener("resize", () => { if (window.innerWidth > 760) closeSidebar(); updatePanelMode(); });
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > 760) closeSidebar();
+    updatePanelMode();
+  });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
-      if (!$("document-panel").hidden) { documentToken++; setPanel(false); }
-      else if ($("sidebar").classList.contains("open")) { closeSidebar(); $("menu-button").focus(); }
+      if (!$("document-panel").hidden) {
+        documentToken++;
+        setPanel(false);
+      } else if ($("sidebar").classList.contains("open")) {
+        closeSidebar();
+        $("menu-button").focus();
+      }
     }
-    const modal = $("document-panel").getAttribute("aria-modal") ? $("document-panel") : ($("sidebar").classList.contains("open") ? $("sidebar") : null);
+    const modal = $("document-panel").getAttribute("aria-modal") ? $("document-panel") : ($("sidebar")
+      .classList.contains("open") ? $("sidebar") : null);
     if (event.key === "Tab" && modal) {
-      const focusable = [...modal.querySelectorAll("a[href], button:not([disabled]), input:not([disabled])")].filter((e) => e.getClientRects().length);
-      const first = focusable[0], last = focusable.at(-1);
-      if (event.shiftKey && document.activeElement === first) { last?.focus(); event.preventDefault(); }
-      else if (!event.shiftKey && document.activeElement === last) { first?.focus(); event.preventDefault(); }
+      const focusable = [...modal.querySelectorAll(
+        "a[href], button:not([disabled]), input:not([disabled])")].filter((e) => e.getClientRects()
+        .length);
+      const first = focusable[0],
+        last = focusable.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        last?.focus();
+        event.preventDefault();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        first?.focus();
+        event.preventDefault();
+      }
     }
   });
   restore();
   render();
-  refreshStatus();
+  refreshStatus().then(() => {
+    if (current().job) watchJob(current());
+  });
 })();

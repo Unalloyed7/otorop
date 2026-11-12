@@ -48,18 +48,38 @@ def rule_periods(text: str) -> list[dict]:
 
 
 def mode_for(filters: SearchFilters, requested: str, reference: date) -> str:
-    if requested == "current" and filters.event_date and filters.event_date > reference:
+    from date_context import governing_span
+    span = governing_span(filters)
+    when = filters.event_date or (span.start if span else None)
+    if requested == "current" and when and when > reference:
         return "future"
     if requested != "auto":
         return requested
     if filters.date_kind in {"law_snapshot", "snapshot", "snapshot_date"}:
         return "snapshot"
-    if not filters.event_date or filters.event_date == reference:
+    if not when or when == reference:
         return "current"
-    return "historical" if filters.event_date < reference else "future"
+    return "historical" if when < reference else "future"
 
 
 def temporal_issue(e: Evidence, filters: SearchFilters, *, mode: str, reference: date) -> str | None:
+    from date_context import governing_span
+    from schemas import ScenarioDates
+    span = governing_span(filters, e)
+    if span:
+        kind = filters.governing_date or filters.date_kind or "event"
+        flat = filters.model_copy(update={"event_date": span.start, "date_kind": kind, "scenario": ScenarioDates()})
+        issue = _temporal_issue_day(e, flat, mode=mode, reference=reference)
+        if issue:
+            return issue
+        if span.precision != "day":
+            flat.event_date = span.end_exclusive - timedelta(days=1)
+            return _temporal_issue_day(e, flat, mode=mode, reference=reference)
+        return None
+    return _temporal_issue_day(e, filters, mode=mode, reference=reference)
+
+
+def _temporal_issue_day(e: Evidence, filters: SearchFilters, *, mode: str, reference: date) -> str | None:
     a, when = e.applicability, filters.event_date
     if not a.current_only:
         if e.metadata.get("document_type") == "internal_policy":
@@ -98,6 +118,11 @@ def temporal_issue(e: Evidence, filters: SearchFilters, *, mode: str, reference:
 
 def period_quoted(supports: list, evidence: list[Evidence], filters: SearchFilters, *, mode: str, reference: date) -> bool:
     """Для датированного прошлого/будущего сам текст периода тоже должен цитироваться."""
+    from date_context import governing_span
+    from schemas import ScenarioDates
+    span = governing_span(filters)
+    if span:
+        filters = filters.model_copy(update={"event_date": span.start, "date_kind": filters.date_kind or "event", "scenario": ScenarioDates()})
     if not filters.event_date or mode_for(filters, mode, reference) in {"current", "snapshot"}:
         return True
     by_id = {e.chunk_id: e for e in evidence}
@@ -107,4 +132,8 @@ def period_quoted(supports: list, evidence: list[Evidence], filters: SearchFilte
             # Не позволяем сузить цитату до суммы, отбросив датированное условие.
             if temporal_issue(e.model_copy(update={"text": support.quote}), filters, mode=mode, reference=reference):
                 return False
+            if span and span.precision != "day":
+                end_filters = filters.model_copy(update={"event_date": span.end_exclusive - timedelta(days=1)})
+                if temporal_issue(e.model_copy(update={"text": support.quote}), end_filters, mode=mode, reference=reference):
+                    return False
     return True

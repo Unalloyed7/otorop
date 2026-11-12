@@ -60,7 +60,7 @@ def test_cli_with_real_http_csv_and_archive(tmp_path, mode):
         server.server_close()
         thread.join(timeout=2)
     assert result.returncode == 0, result.stderr
-    assert "answer=1" in result.stdout
+    assert ("partial=1" if mode is False else "answer=1") in result.stdout
     validate_submission(tmp_path / "submission.csv", ["001"])
     with (tmp_path / "submission.csv").open(encoding="utf-8", newline="") as f:
         row = next(csv.DictReader(f))
@@ -74,5 +74,5 @@ def test_cli_with_real_http_csv_and_archive(tmp_path, mode):
         record = json.loads(report)
         assert record["id"] == "001" and record["verify"] is mode
         assert record["calls"] == {"/chat/completions": expected}
-        assert record["answer"]["status"] == "answer" and record["answer"]["citations"]
+        assert record["answer"]["status"] == ("partial" if mode is False else "answer") and record["answer"]["citations"]
         assert "test-only-key" not in report and "127.0.0.1:" not in report

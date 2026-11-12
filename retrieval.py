@@ -385,7 +385,7 @@ class SearchIndex:
                     continue
             if wanted_type and document.get("document_type") != wanted_type:
                 continue
-            if document.get("document_type") == "internal_policy" and (
+            if not filters.get("include_other_editions") and document.get("document_type") == "internal_policy" and (
                 (document.get("valid_from") and policy_date < document["valid_from"])
                 or (document.get("valid_to") and policy_date >= document["valid_to"])
             ):
@@ -823,6 +823,14 @@ class SchemaSearchBackend:
                 index_filters["counterparty_candidates"] = near_parties
         event_date = filter_values.get("event_date")
         date_kind = filter_values.get("date_kind")
+        if filter_values.get("scenario") and any(filter_values["scenario"].get(k) for k in ("contract_signed", "specification_signed", "delivery", "event")):
+            # Интервалы проверяет движок целиком; поиск не подменяет месяц первым днём.
+            index_filters["include_other_editions"] = True
+            specification = filter_values["scenario"].get("specification_signed")
+            if specification and specification.get("precision") == "day":
+                index_filters["specification_signed_at"] = specification["start"]
+        if filter_values.get("purpose") == "limitations":
+            index_filters["include_other_editions"] = True
         if event_date:
             if date_kind in {"specification_signed", "specification_signed_at"}:
                 index_filters["specification_signed_at"] = event_date
@@ -845,6 +853,26 @@ class SchemaSearchBackend:
             ranking=mode,
             dense_scores=dense_scores,
         )
+        if filter_values.get("purpose") == "limitations":
+            anchors = set(filter_values.get("anchor_document_ids", []))
+            anchor_docs = [d for d in self.index.documents.values() if d["document_id"] in anchors]
+            contracts = {d.get("contract_number") for d in anchor_docs if d.get("contract_number")}
+            linked = {i for d in anchor_docs for i in d.get("linked_document_ids", [])}
+            policy = bool(contracts) or any(d["document_type"] == "internal_policy" for d in anchor_docs)
+            limits = []
+            for chunk in self.index.chunks:
+                relevant = (chunk["document_id"] in anchors or chunk["document_id"] in linked
+                            or (chunk.get("contract_number") and chunk.get("contract_number") in contracts)
+                            or (policy and chunk["document_type"] == "internal_policy"))
+                if relevant and (chunk["document_type"] == "amendment" or re.search(r"исключ|типов|иностран|независимо|не более|огранич|кроме|при услов|только|продлева", chunk["text"], re.I)):
+                    item = dict(chunk)
+                    item["score"] = 0.0
+                    item["applicability"] = evaluate_applicability(item, _date(index_filters.get("specification_signed_at")))
+                    item["retrieval_reason"] = "limitation_context"
+                    limits.append(item)
+            # Ограниченный отдельный поиск ограничений: сначала связанные изменения
+            # и исключения, затем ранжированная выдача. Нельзя незаметно срезать его top_k.
+            evidence_items = list({item["chunk_id"]: item for item in [*limits, *evidence_items]}.values())[:self.top_k]
         if (
             self.client is not None
             and self.client.settings.reranker_model

@@ -320,7 +320,7 @@ async def test_contract_from_history_resolves_candidates(corpus, local_settings)
     backend = create_search(corpus)
     result = await backend.search("срок оплаты по Т-1/2026", filters)
     clause = next(e for e in result.evidence if e.section == "4.2")
-    client = FakeClient(local_settings, intent(filters=filters), draft(clause), {"supported": [0]})
+    client = FakeClient(local_settings, intent(filters=filters), draft(clause), {"supported": [0]}, {"status": "answer", "claims": []}, {"supported": [0]})
     history = [{"role": "user", "content": "Договор Т-1/2026."}, {"role": "assistant", "content": "Какой вопрос?"}, {"role": "user", "content": "Как оплачиваем Альфе?"}]
     answer = await LegalAssistant(backend, client).answer(history)
     assert answer.status == "answer"
@@ -405,7 +405,7 @@ async def test_real_retrieval_and_engine_write_same_csv(corpus, local_settings):
     filters = SearchFilters(contract_number="Т-1/2026")
     found = await backend.search("Срок оплаты по Т-1/2026", filters)
     clause = next(e for e in found.evidence if e.section == "4.2")
-    client = FakeClient(local_settings, intent(filters=filters), draft(clause), {"supported": [0]})
+    client = FakeClient(local_settings, intent(filters=filters), draft(clause), {"supported": [0]}, {"status": "answer", "claims": []}, {"supported": [0]})
     engine = LegalAssistant(backend, client)
     (corpus / "questions.csv").write_text('id,question\n001,"Срок оплаты по Т-1/2026?"\n', encoding="utf-8")
     output = corpus / "submission.csv"
@@ -434,6 +434,6 @@ async def test_archive_rules_remain_available(corpus, local_settings):
     found = await backend.search("Оригиналы архив кабинет", SearchFilters())
     archive = next(e for e in found.evidence if "кабинет 412" in e.text)
     plan = intent().model_copy(update={"query": "Оригиналы архив кабинет"})
-    client = FakeClient(local_settings, plan, draft(archive, text="Оригиналы хранятся в архиве, кабинет 412."), {"supported": [0]})
+    client = FakeClient(local_settings, plan, draft(archive, text="Оригиналы хранятся в архиве, кабинет 412."), {"supported": [0]}, {"status": "answer", "claims": []}, {"supported": [0]})
     result = await LegalAssistant(backend, client).answer("Где хранятся оригиналы?")
     assert result.status == "answer" and "412" in result.text

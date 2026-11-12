@@ -1,0 +1,274 @@
+[
+  {
+    "statement_id": "example-confirmed",
+    "text": "Оплата производится в течение 30 календарных дней после подписания УПД.",
+    "subject": {
+      "contract_number": "Т-1/2026",
+      "counterparty": "Тестовый поставщик",
+      "employee": null
+    },
+    "rule": "duty",
+    "value": {
+      "description": "Оплата поставленной партии",
+      "amount": null,
+      "currency": null,
+      "duration": "30",
+      "unit": "дней",
+      "day_type": "calendar",
+      "counted_from": "подписание УПД",
+      "action": "оплатить товар"
+    },
+    "conditions": [],
+    "period": {
+      "valid_from": "2026-01-01",
+      "valid_to": null,
+      "date_kind": "event"
+    },
+    "supports": [
+      {
+        "document_id": "example-contract",
+        "chunk_id": "example-contract:4.2",
+        "document_title": "Вымышленный договор № Т-1/2026",
+        "section": "п. 4.2",
+        "quote": "4.2. Оплата производится в течение 30 календарных дней после подписания УПД.",
+        "coordinates": {
+          "source_path": "example-contract.txt",
+          "char_start": 100,
+          "char_end": 176,
+          "page": null,
+          "bbox": null
+        },
+        "edition": "Первоначальная редакция",
+        "claim_index": 0,
+        "role": "support",
+        "applicability": {
+          "edition": "Первоначальная редакция",
+          "valid_from": "2026-01-01",
+          "valid_to": null,
+          "date_kind": "event",
+          "conditions": [],
+          "supersedes": [],
+          "current_only": false,
+          "snapshot_date": null,
+          "resolved": true
+        }
+      }
+    ],
+    "limitations": [],
+    "check": {
+      "status": "confirmed",
+      "mechanical_pass": true,
+      "semantic_checked": true,
+      "reasons": [
+        "Вымышленный пример результата проверки"
+      ]
+    },
+    "published": true
+  },
+  {
+    "statement_id": "example-conditional",
+    "text": "Если условие спецификации выполнено, применяется указанное правило.",
+    "subject": {
+      "contract_number": "Т-1/2026",
+      "counterparty": "Тестовый поставщик",
+      "employee": null
+    },
+    "rule": "duty",
+    "value": {
+      "description": "Оплата поставленной партии",
+      "amount": null,
+      "currency": null,
+      "duration": "30",
+      "unit": "дней",
+      "day_type": "calendar",
+      "counted_from": "подписание УПД",
+      "action": "оплатить товар"
+    },
+    "conditions": [
+      {
+        "text": "Спецификация подписана после установленной даты",
+        "key": "specification_after_cutoff",
+        "expected": null,
+        "status": "unknown",
+        "citations": []
+      }
+    ],
+    "period": {
+      "valid_from": "2026-01-01",
+      "valid_to": null,
+      "date_kind": "event"
+    },
+    "supports": [
+      {
+        "document_id": "example-contract",
+        "chunk_id": "example-contract:4.2",
+        "document_title": "Вымышленный договор № Т-1/2026",
+        "section": "п. 4.2",
+        "quote": "4.2. Оплата производится в течение 30 календарных дней после подписания УПД.",
+        "coordinates": {
+          "source_path": "example-contract.txt",
+          "char_start": 100,
+          "char_end": 176,
+          "page": null,
+          "bbox": null
+        },
+        "edition": "Первоначальная редакция",
+        "claim_index": 0,
+        "role": "support",
+        "applicability": {
+          "edition": "Первоначальная редакция",
+          "valid_from": "2026-01-01",
+          "valid_to": null,
+          "date_kind": "event",
+          "conditions": [],
+          "supersedes": [],
+          "current_only": false,
+          "snapshot_date": null,
+          "resolved": true
+        }
+      }
+    ],
+    "limitations": [],
+    "check": {
+      "status": "conditional",
+      "mechanical_pass": true,
+      "semantic_checked": true,
+      "reasons": [
+        "Вымышленный пример результата проверки"
+      ]
+    },
+    "published": true
+  },
+  {
+    "statement_id": "example-contradiction",
+    "text": "Оплата производится в течение 30 календарных дней после подписания УПД.",
+    "subject": {
+      "contract_number": "Т-1/2026",
+      "counterparty": "Тестовый поставщик",
+      "employee": null
+    },
+    "rule": "duty",
+    "value": {
+      "description": "Оплата поставленной партии",
+      "amount": null,
+      "currency": null,
+      "duration": "30",
+      "unit": "дней",
+      "day_type": "calendar",
+      "counted_from": "подписание УПД",
+      "action": "оплатить товар"
+    },
+    "conditions": [],
+    "period": {
+      "valid_from": "2026-01-01",
+      "valid_to": null,
+      "date_kind": "event"
+    },
+    "supports": [
+      {
+        "document_id": "example-contract",
+        "chunk_id": "example-contract:4.2",
+        "document_title": "Вымышленный договор № Т-1/2026",
+        "section": "п. 4.2",
+        "quote": "4.2. Оплата производится в течение 30 календарных дней после подписания УПД.",
+        "coordinates": {
+          "source_path": "example-contract.txt",
+          "char_start": 100,
+          "char_end": 176,
+          "page": null,
+          "bbox": null
+        },
+        "edition": "Первоначальная редакция",
+        "claim_index": 0,
+        "role": "support",
+        "applicability": {
+          "edition": "Первоначальная редакция",
+          "valid_from": "2026-01-01",
+          "valid_to": null,
+          "date_kind": "event",
+          "conditions": [],
+          "supersedes": [],
+          "current_only": false,
+          "snapshot_date": null,
+          "resolved": true
+        }
+      }
+    ],
+    "limitations": [],
+    "check": {
+      "status": "contradiction",
+      "mechanical_pass": true,
+      "semantic_checked": true,
+      "reasons": [
+        "Найдено ограничивающее положение; исходный вывод в ответ не включается"
+      ]
+    },
+    "published": false
+  },
+  {
+    "statement_id": "example-insufficient",
+    "text": "Оплата производится в течение 30 календарных дней после подписания УПД.",
+    "subject": {
+      "contract_number": "Т-1/2026",
+      "counterparty": "Тестовый поставщик",
+      "employee": null
+    },
+    "rule": "duty",
+    "value": {
+      "description": "Оплата поставленной партии",
+      "amount": null,
+      "currency": null,
+      "duration": "30",
+      "unit": "дней",
+      "day_type": "calendar",
+      "counted_from": "подписание УПД",
+      "action": "оплатить товар"
+    },
+    "conditions": [],
+    "period": {
+      "valid_from": "2026-01-01",
+      "valid_to": null,
+      "date_kind": "event"
+    },
+    "supports": [
+      {
+        "document_id": "example-contract",
+        "chunk_id": "example-contract:4.2",
+        "document_title": "Вымышленный договор № Т-1/2026",
+        "section": "п. 4.2",
+        "quote": "4.2. Оплата производится в течение 30 календарных дней после подписания УПД.",
+        "coordinates": {
+          "source_path": "example-contract.txt",
+          "char_start": 100,
+          "char_end": 176,
+          "page": null,
+          "bbox": null
+        },
+        "edition": "Первоначальная редакция",
+        "claim_index": 0,
+        "role": "support",
+        "applicability": {
+          "edition": "Первоначальная редакция",
+          "valid_from": "2026-01-01",
+          "valid_to": null,
+          "date_kind": "event",
+          "conditions": [],
+          "supersedes": [],
+          "current_only": false,
+          "snapshot_date": null,
+          "resolved": true
+        }
+      }
+    ],
+    "limitations": [],
+    "check": {
+      "status": "insufficient",
+      "mechanical_pass": true,
+      "semantic_checked": true,
+      "reasons": [
+        "Вымышленный пример результата проверки"
+      ]
+    },
+    "published": false
+  }
+]

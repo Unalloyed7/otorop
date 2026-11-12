@@ -4,6 +4,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 import json
+import hashlib
+import os
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,20 @@ _active: ContextVar[dict | None] = ContextVar("legal_run_diagnostics", default=N
 
 def active_run() -> dict | None:
     return _active.get()
+
+
+def runtime_configuration(client=None):
+    root = Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    for name in ("schemas.py", "assistant.py", "llm_client.py", "retrieval.py", "documents.py", "temporal.py", "date_context.py", "verification.py", "execution.py", "solution.py"):
+        path = root / name
+        if path.is_file():
+            digest.update(name.encode() + b"\0" + path.read_bytes())
+    settings = getattr(client, "settings", None)
+    result = {"code_revision": os.environ.get("CODE_VERSION"), "engine_sha256": digest.hexdigest()}
+    if settings:
+        result.update({key: getattr(settings, key, None) for key in ("model", "embedding_model", "reranker_model", "temperature", "max_tokens", "verify", "max_workers", "max_model_calls", "max_search_calls", "question_timeout", "search_retries", "timeout", "retries", "top_k", "reranker_top_n")})
+    return result
 
 
 @contextmanager

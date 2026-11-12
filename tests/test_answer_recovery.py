@@ -70,7 +70,9 @@ async def test_recovery_adds_new_claim_without_losing_verified_one(settings, evi
     assert result.status == "answer" and len(result.citations) == 2
     assert "30" in result.text and "24" in result.text and not result.missing_info
     assert len(search.requests) == 2 and len(client.requests) == 5
-    assert search.requests[0][1] == search.requests[1][1]
+    assert search.requests[1][1]["purpose"] == "limitations"
+    assert search.requests[1][1]["anchor_document_ids"] == [evidence.document_id]
+    assert search.requests[0][1]["contract_number"] == search.requests[1][1]["contract_number"]
     assert search.requests[0][0] != search.requests[1][0]
     assert "Гарантия" in search.requests[1][0]
     assert client.requests[3][1]["previous_claims"]
@@ -182,9 +184,10 @@ async def test_explicit_year_period_is_usable(settings, evidence):
     assert result.status == "answer"
 
 
-async def test_known_part_with_required_user_clarification_does_not_retry(settings, evidence):
-    search = SequentialSearch(SearchResult(evidence=[evidence]))
+async def test_known_part_with_user_clarification_still_scans_limitations(settings, evidence):
+    search = SequentialSearch(SearchResult(evidence=[evidence]), SearchResult(evidence=[evidence]))
     client = FakeClient(settings, intent(), draft(evidence, status="clarify", missing_info=["Дата подписания спецификации"]), {"supported": [0]})
     result = await LegalAssistant(search, client).answer("Вопрос")
     assert result.status == "partial" and result.citations
-    assert len(search.requests) == 1
+    assert len(search.requests) == 2
+    assert search.requests[1][1]["purpose"] == "limitations"

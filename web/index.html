@@ -8,6 +8,7 @@
   <title>ПСБ · Юридический ассистент</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/workbench.js" defer></script>
   <script src="/assets/app.js" defer></script>
 </head>
 <body>
@@ -20,6 +21,7 @@
       <div class="sidebar-heading">Диалоги <span>в этой вкладке</span></div>
       <nav class="conversation-list" id="conversation-list" aria-label="История диалогов"></nav>
       <div class="sidebar-bottom">
+        <button class="library-button" id="diagnostics-button" type="button"><span aria-hidden="true">⇄</span><span>Сравнить запуски<small>Локальные отчёты и оценки</small></span></button>
         <button class="library-button" id="library-button" type="button"><span class="book-icon" aria-hidden="true">▤</span><span>База документов<small id="document-count">Загружаем каталог</small></span><span aria-hidden="true">↗</span></button>
         <div class="sidebar-footer"><span class="privacy-dot"></span> Основания всегда под рукой<span class="build-label">Hack&Change 2026</span></div>
       </div>
@@ -47,6 +49,7 @@
         <div class="messages" id="messages" role="log" aria-live="polite" aria-relevant="additions" hidden></div>
       </section>
       <div class="composer-area">
+        <details class="scenario-settings" id="scenario-settings"><summary>Обстоятельства и точность дат</summary><p>День: 2026-11-12 · месяц: 2024-08 · год: 2024 · диапазон: 2024-08-01..2024-09-15.</p><div class="scenario-grid"><label>Подписание договора<input id="scenario-contract_signed" type="text" maxlength="100" placeholder="Например, август 2024"></label><label>Подписание спецификации<input id="scenario-specification_signed" type="text" maxlength="100"></label><label>Поставка<input id="scenario-delivery" type="text" maxlength="100"></label><label>Рассматриваемое событие<input id="scenario-event" type="text" maxlength="100"></label><label>Типовая форма без изменений<select id="fact-standard_form_unchanged"><option value="">Не установлено</option><option value="true">Да</option><option value="false">Нет</option></select></label><label>Иностранный контрагент<select id="fact-foreign_counterparty"><option value="">Не установлено</option><option value="true">Да</option><option value="false">Нет</option></select></label></div><button id="recheck-scenario" class="text-button" type="button">Перепроверить последний вопрос</button></details>
         <form class="composer" id="chat-form">
           <label class="sr-only" for="question">Ваш юридический вопрос</label>
           <textarea id="question" rows="2" maxlength="12000" placeholder="Опишите вопрос. Укажите договор или контрагента, если они известны…" required></textarea>

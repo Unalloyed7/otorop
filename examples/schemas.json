@@ -241,6 +241,135 @@
     "type": "object"
   },
   "SearchFilters": {
+    "$defs": {
+      "DateSpan": {
+        "additionalProperties": false,
+        "description": "Календарный интервал [start, end_exclusive), а не выдуманная дата события.",
+        "properties": {
+          "start": {
+            "format": "date",
+            "title": "Start",
+            "type": "string"
+          },
+          "end_exclusive": {
+            "format": "date",
+            "title": "End Exclusive",
+            "type": "string"
+          },
+          "precision": {
+            "default": "range",
+            "enum": [
+              "day",
+              "month",
+              "year",
+              "range"
+            ],
+            "title": "Precision",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Label"
+          }
+        },
+        "required": [
+          "start",
+          "end_exclusive"
+        ],
+        "title": "DateSpan",
+        "type": "object"
+      },
+      "ScenarioDates": {
+        "additionalProperties": false,
+        "properties": {
+          "contract_signed": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DateSpan"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "specification_signed": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DateSpan"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DateSpan"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "event": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DateSpan"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "facts": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "maxProperties": 30,
+            "title": "Facts",
+            "type": "object"
+          }
+        },
+        "title": "ScenarioDates",
+        "type": "object"
+      }
+    },
     "additionalProperties": false,
     "properties": {
       "contract_number": {
@@ -304,6 +433,44 @@
         "default": null,
         "description": "Какое событие датировано, например specification_signed",
         "title": "Date Kind"
+      },
+      "scenario": {
+        "$ref": "#/$defs/ScenarioDates"
+      },
+      "governing_date": {
+        "anyOf": [
+          {
+            "enum": [
+              "contract_signed",
+              "specification_signed",
+              "delivery",
+              "event"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Governing Date"
+      },
+      "purpose": {
+        "default": "grounds",
+        "enum": [
+          "grounds",
+          "limitations"
+        ],
+        "title": "Purpose",
+        "type": "string"
+      },
+      "anchor_document_ids": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 20,
+        "title": "Anchor Document Ids",
+        "type": "array"
       }
     },
     "title": "SearchFilters",
@@ -592,6 +759,96 @@
   },
   "Answer": {
     "$defs": {
+      "Applicability": {
+        "additionalProperties": false,
+        "properties": {
+          "edition": {
+            "minLength": 1,
+            "title": "Edition",
+            "type": "string"
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid From"
+          },
+          "valid_to": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid To"
+          },
+          "date_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date Kind"
+          },
+          "conditions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "supersedes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supersedes",
+            "type": "array"
+          },
+          "current_only": {
+            "default": false,
+            "title": "Current Only",
+            "type": "boolean"
+          },
+          "snapshot_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Date"
+          },
+          "resolved": {
+            "default": false,
+            "title": "Resolved",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "edition"
+        ],
+        "title": "Applicability",
+        "type": "object"
+      },
       "Citation": {
         "additionalProperties": false,
         "properties": {
@@ -632,6 +889,31 @@
             "minimum": 0,
             "title": "Claim Index",
             "type": "integer"
+          },
+          "role": {
+            "default": "support",
+            "enum": [
+              "support",
+              "restriction",
+              "contradiction",
+              "amendment",
+              "exception",
+              "other_edition",
+              "procedure"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "applicability": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Applicability"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -645,6 +927,69 @@
           "claim_index"
         ],
         "title": "Citation",
+        "type": "object"
+      },
+      "Condition": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "maxLength": 1200,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Key"
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected"
+          },
+          "status": {
+            "default": "unknown",
+            "enum": [
+              "met",
+              "not_met",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/$defs/Citation"
+            },
+            "title": "Citations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "Condition",
         "type": "object"
       },
       "Coordinates": {
@@ -714,6 +1059,432 @@
         ],
         "title": "Coordinates",
         "type": "object"
+      },
+      "DateSpan": {
+        "additionalProperties": false,
+        "description": "Календарный интервал [start, end_exclusive), а не выдуманная дата события.",
+        "properties": {
+          "start": {
+            "format": "date",
+            "title": "Start",
+            "type": "string"
+          },
+          "end_exclusive": {
+            "format": "date",
+            "title": "End Exclusive",
+            "type": "string"
+          },
+          "precision": {
+            "default": "range",
+            "enum": [
+              "day",
+              "month",
+              "year",
+              "range"
+            ],
+            "title": "Precision",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Label"
+          }
+        },
+        "required": [
+          "start",
+          "end_exclusive"
+        ],
+        "title": "DateSpan",
+        "type": "object"
+      },
+      "RulePeriod": {
+        "additionalProperties": false,
+        "properties": {
+          "valid_from": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid From"
+          },
+          "valid_to": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid To"
+          },
+          "date_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date Kind"
+          }
+        },
+        "title": "RulePeriod",
+        "type": "object"
+      },
+      "RuleValue": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 1600,
+            "title": "Description",
+            "type": "string"
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Amount"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Currency"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Duration"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Unit"
+          },
+          "day_type": {
+            "default": "unspecified",
+            "enum": [
+              "calendar",
+              "working",
+              "unspecified"
+            ],
+            "title": "Day Type",
+            "type": "string"
+          },
+          "counted_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Counted From"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Action"
+          }
+        },
+        "title": "RuleValue",
+        "type": "object"
+      },
+      "ScenarioDates": {
+        "additionalProperties": false,
+        "properties": {
+          "contract_signed": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DateSpan"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "specification_signed": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DateSpan"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "delivery": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DateSpan"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "event": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DateSpan"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "facts": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "maxProperties": 30,
+            "title": "Facts",
+            "type": "object"
+          }
+        },
+        "title": "ScenarioDates",
+        "type": "object"
+      },
+      "StatementCheck": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "enum": [
+              "confirmed",
+              "conditional",
+              "contradiction",
+              "insufficient"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "mechanical_pass": {
+            "title": "Mechanical Pass",
+            "type": "boolean"
+          },
+          "semantic_checked": {
+            "title": "Semantic Checked",
+            "type": "boolean"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "status",
+          "mechanical_pass",
+          "semantic_checked"
+        ],
+        "title": "StatementCheck",
+        "type": "object"
+      },
+      "Subject": {
+        "additionalProperties": false,
+        "properties": {
+          "contract_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contract Number"
+          },
+          "counterparty": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Counterparty"
+          },
+          "employee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Employee"
+          }
+        },
+        "title": "Subject",
+        "type": "object"
+      },
+      "VerifiedStatement": {
+        "additionalProperties": false,
+        "properties": {
+          "statement_id": {
+            "title": "Statement Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "subject": {
+            "$ref": "#/$defs/Subject"
+          },
+          "rule": {
+            "default": "information",
+            "enum": [
+              "duty",
+              "permission",
+              "restriction",
+              "information"
+            ],
+            "title": "Rule",
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/$defs/RuleValue"
+          },
+          "conditions": {
+            "items": {
+              "$ref": "#/$defs/Condition"
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "period": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RulePeriod"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "supports": {
+            "items": {
+              "$ref": "#/$defs/Citation"
+            },
+            "title": "Supports",
+            "type": "array"
+          },
+          "limitations": {
+            "items": {
+              "$ref": "#/$defs/Citation"
+            },
+            "title": "Limitations",
+            "type": "array"
+          },
+          "check": {
+            "$ref": "#/$defs/StatementCheck"
+          },
+          "published": {
+            "default": false,
+            "title": "Published",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "statement_id",
+          "text",
+          "subject",
+          "value",
+          "check"
+        ],
+        "title": "VerifiedStatement",
+        "type": "object"
       }
     },
     "additionalProperties": false,
@@ -750,6 +1521,27 @@
         },
         "title": "Missing Info",
         "type": "array"
+      },
+      "schema_version": {
+        "const": 2,
+        "default": 2,
+        "title": "Schema Version",
+        "type": "integer"
+      },
+      "statements": {
+        "items": {
+          "$ref": "#/$defs/VerifiedStatement"
+        },
+        "title": "Statements",
+        "type": "array"
+      },
+      "scenario": {
+        "$ref": "#/$defs/ScenarioDates"
+      },
+      "verification": {
+        "additionalProperties": true,
+        "title": "Verification",
+        "type": "object"
       }
     },
     "required": [
@@ -757,6 +1549,783 @@
       "text"
     ],
     "title": "Answer",
+    "type": "object"
+  },
+  "VerifiedStatement": {
+    "$defs": {
+      "Applicability": {
+        "additionalProperties": false,
+        "properties": {
+          "edition": {
+            "minLength": 1,
+            "title": "Edition",
+            "type": "string"
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid From"
+          },
+          "valid_to": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid To"
+          },
+          "date_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date Kind"
+          },
+          "conditions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "supersedes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supersedes",
+            "type": "array"
+          },
+          "current_only": {
+            "default": false,
+            "title": "Current Only",
+            "type": "boolean"
+          },
+          "snapshot_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Date"
+          },
+          "resolved": {
+            "default": false,
+            "title": "Resolved",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "edition"
+        ],
+        "title": "Applicability",
+        "type": "object"
+      },
+      "Citation": {
+        "additionalProperties": false,
+        "properties": {
+          "document_id": {
+            "minLength": 1,
+            "title": "Document Id",
+            "type": "string"
+          },
+          "chunk_id": {
+            "minLength": 1,
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "document_title": {
+            "minLength": 1,
+            "title": "Document Title",
+            "type": "string"
+          },
+          "section": {
+            "minLength": 1,
+            "title": "Section",
+            "type": "string"
+          },
+          "quote": {
+            "minLength": 1,
+            "title": "Quote",
+            "type": "string"
+          },
+          "coordinates": {
+            "$ref": "#/$defs/Coordinates"
+          },
+          "edition": {
+            "minLength": 1,
+            "title": "Edition",
+            "type": "string"
+          },
+          "claim_index": {
+            "minimum": 0,
+            "title": "Claim Index",
+            "type": "integer"
+          },
+          "role": {
+            "default": "support",
+            "enum": [
+              "support",
+              "restriction",
+              "contradiction",
+              "amendment",
+              "exception",
+              "other_edition",
+              "procedure"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "applicability": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Applicability"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "document_id",
+          "chunk_id",
+          "document_title",
+          "section",
+          "quote",
+          "coordinates",
+          "edition",
+          "claim_index"
+        ],
+        "title": "Citation",
+        "type": "object"
+      },
+      "Condition": {
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "maxLength": 1200,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Key"
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected"
+          },
+          "status": {
+            "default": "unknown",
+            "enum": [
+              "met",
+              "not_met",
+              "unknown"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/$defs/Citation"
+            },
+            "title": "Citations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "Condition",
+        "type": "object"
+      },
+      "Coordinates": {
+        "additionalProperties": false,
+        "properties": {
+          "source_path": {
+            "minLength": 1,
+            "title": "Source Path",
+            "type": "string"
+          },
+          "char_start": {
+            "minimum": 0,
+            "title": "Char Start",
+            "type": "integer"
+          },
+          "char_end": {
+            "exclusiveMinimum": 0,
+            "title": "Char End",
+            "type": "integer"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page"
+          },
+          "bbox": {
+            "anyOf": [
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bbox"
+          }
+        },
+        "required": [
+          "source_path",
+          "char_start",
+          "char_end"
+        ],
+        "title": "Coordinates",
+        "type": "object"
+      },
+      "RulePeriod": {
+        "additionalProperties": false,
+        "properties": {
+          "valid_from": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid From"
+          },
+          "valid_to": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid To"
+          },
+          "date_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date Kind"
+          }
+        },
+        "title": "RulePeriod",
+        "type": "object"
+      },
+      "RuleValue": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 1600,
+            "title": "Description",
+            "type": "string"
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Amount"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Currency"
+          },
+          "duration": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Duration"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Unit"
+          },
+          "day_type": {
+            "default": "unspecified",
+            "enum": [
+              "calendar",
+              "working",
+              "unspecified"
+            ],
+            "title": "Day Type",
+            "type": "string"
+          },
+          "counted_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Counted From"
+          },
+          "action": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Action"
+          }
+        },
+        "title": "RuleValue",
+        "type": "object"
+      },
+      "StatementCheck": {
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "enum": [
+              "confirmed",
+              "conditional",
+              "contradiction",
+              "insufficient"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "mechanical_pass": {
+            "title": "Mechanical Pass",
+            "type": "boolean"
+          },
+          "semantic_checked": {
+            "title": "Semantic Checked",
+            "type": "boolean"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "status",
+          "mechanical_pass",
+          "semantic_checked"
+        ],
+        "title": "StatementCheck",
+        "type": "object"
+      },
+      "Subject": {
+        "additionalProperties": false,
+        "properties": {
+          "contract_number": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Contract Number"
+          },
+          "counterparty": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Counterparty"
+          },
+          "employee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Employee"
+          }
+        },
+        "title": "Subject",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "statement_id": {
+        "title": "Statement Id",
+        "type": "string"
+      },
+      "text": {
+        "title": "Text",
+        "type": "string"
+      },
+      "subject": {
+        "$ref": "#/$defs/Subject"
+      },
+      "rule": {
+        "default": "information",
+        "enum": [
+          "duty",
+          "permission",
+          "restriction",
+          "information"
+        ],
+        "title": "Rule",
+        "type": "string"
+      },
+      "value": {
+        "$ref": "#/$defs/RuleValue"
+      },
+      "conditions": {
+        "items": {
+          "$ref": "#/$defs/Condition"
+        },
+        "title": "Conditions",
+        "type": "array"
+      },
+      "period": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/RulePeriod"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "supports": {
+        "items": {
+          "$ref": "#/$defs/Citation"
+        },
+        "title": "Supports",
+        "type": "array"
+      },
+      "limitations": {
+        "items": {
+          "$ref": "#/$defs/Citation"
+        },
+        "title": "Limitations",
+        "type": "array"
+      },
+      "check": {
+        "$ref": "#/$defs/StatementCheck"
+      },
+      "published": {
+        "default": false,
+        "title": "Published",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "statement_id",
+      "text",
+      "subject",
+      "value",
+      "check"
+    ],
+    "title": "VerifiedStatement",
+    "type": "object"
+  },
+  "ScenarioDates": {
+    "$defs": {
+      "DateSpan": {
+        "additionalProperties": false,
+        "description": "Календарный интервал [start, end_exclusive), а не выдуманная дата события.",
+        "properties": {
+          "start": {
+            "format": "date",
+            "title": "Start",
+            "type": "string"
+          },
+          "end_exclusive": {
+            "format": "date",
+            "title": "End Exclusive",
+            "type": "string"
+          },
+          "precision": {
+            "default": "range",
+            "enum": [
+              "day",
+              "month",
+              "year",
+              "range"
+            ],
+            "title": "Precision",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Label"
+          }
+        },
+        "required": [
+          "start",
+          "end_exclusive"
+        ],
+        "title": "DateSpan",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "contract_signed": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/DateSpan"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "specification_signed": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/DateSpan"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "delivery": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/DateSpan"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "event": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/DateSpan"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "facts": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer"
+            }
+          ]
+        },
+        "maxProperties": 30,
+        "title": "Facts",
+        "type": "object"
+      }
+    },
+    "title": "ScenarioDates",
+    "type": "object"
+  },
+  "DateSpan": {
+    "additionalProperties": false,
+    "description": "Календарный интервал [start, end_exclusive), а не выдуманная дата события.",
+    "properties": {
+      "start": {
+        "format": "date",
+        "title": "Start",
+        "type": "string"
+      },
+      "end_exclusive": {
+        "format": "date",
+        "title": "End Exclusive",
+        "type": "string"
+      },
+      "precision": {
+        "default": "range",
+        "enum": [
+          "day",
+          "month",
+          "year",
+          "range"
+        ],
+        "title": "Precision",
+        "type": "string"
+      },
+      "label": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Label"
+      }
+    },
+    "required": [
+      "start",
+      "end_exclusive"
+    ],
+    "title": "DateSpan",
     "type": "object"
   }
 }

@@ -13,7 +13,7 @@ from collections import Counter
 from pathlib import Path
 
 from assistant import LegalAssistant
-from diagnostics import append_report, capture_run
+from diagnostics import append_report, capture_run, runtime_configuration
 from llm_client import LLMClient, Settings, env_value
 from schemas import Answer
 from search_adapter import build_search
@@ -113,7 +113,7 @@ async def _process(rows, engine, workers, budget=1120, *, report_path=None):
 
     def record(i, result, text, run, elapsed):
         if report_path:
-            append_report(report_path, {"id": rows[i][0], "question": rows[i][1], "verify": getattr(engine, "verify", None), "answer": result.model_dump(mode="json"), "csv_answer": text, "duration_ms": round(elapsed * 1000, 2), "calls": dict(Counter(c["endpoint"] for c in run["api_calls"])), **run}, secrets=secrets)
+            append_report(report_path, {"id": rows[i][0], "question": rows[i][1], "verify": getattr(engine, "verify", None), "configuration": runtime_configuration(client), "answer": result.model_dump(mode="json"), "csv_answer": text, "duration_ms": round(elapsed * 1000, 2), "calls": dict(Counter(c["endpoint"] for c in run["api_calls"])), **run}, secrets=secrets)
             written.add(i)
             invalid = sum(not output["valid"] for output in run["model_outputs"])
             print(f"diagnostics: case={i+1}, status={result.status}, api_calls={len(run['api_calls'])}, invalid_json={invalid}", flush=True)

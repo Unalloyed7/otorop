@@ -94,6 +94,15 @@ def test_adjacent_numbers_cannot_justify_a_larger_amount(evidence):
     with pytest.raises(CitationError): validate(response, e)
 
 
+@pytest.mark.parametrize("amount,accepted", [("30.00", True), ("-30", False), ("−30", False)])
+def test_exact_decimal_value_does_not_lose_sign(evidence, amount, accepted):
+    response = draft(evidence, text="Срок составляет " + amount + " календарных дней.")
+    if accepted:
+        assert validate(response, evidence)
+    else:
+        with pytest.raises(CitationError): validate(response, evidence)
+
+
 @pytest.mark.parametrize("include_period", [True, False])
 async def test_historical_period_is_required_after_whitespace_recovery(settings, evidence, include_period):
     source = "С 1\u00a0января 2026 года ставка составляет 25 процентов."

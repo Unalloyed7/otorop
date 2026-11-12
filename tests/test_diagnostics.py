@@ -55,7 +55,9 @@ async def test_report_records_invalid_model_json(settings):
         with capture_run() as run:
             answer = await LegalAssistant(FakeSearch(), client).answer("Вопрос", trace=run)
     assert answer.status == "error"
-    assert run["model_outputs"][0] == {"schema": "Intent", "output": "not JSON", "valid": False}
+    output = run["model_outputs"][0]
+    assert output["schema"] == "Intent" and output["output"] == "not JSON" and not output["valid"]
+    assert output["errors"]
     assert run["api_calls"][0]["http_status"] == 200
     assert any(s["stage"] == "error" for s in run["stages"])
 

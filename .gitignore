@@ -11,3 +11,4 @@ dist/
 playwright-report/
 run-report*.jsonl
 reports/
+.state/
