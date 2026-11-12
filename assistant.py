@@ -392,7 +392,30 @@ class LegalAssistant:
                 if query in query_history:
                     break
                 query_history.add(query)
-                found = SearchResult.model_validate(await self.search.search(query, filters))
+                bundle_search = getattr(self.search, "search_bundle", None)
+                bundle_adapter = getattr(self.search, "bundle_result", None)
+                if callable(bundle_search) and callable(bundle_adapter):
+                    search_parts = intent.parts if not attempt else targets
+                    bundle = await bundle_search(
+                        search_parts or intent.parts,
+                        filters,
+                        top_k=self.client.settings.top_k,
+                        max_context_chars=MAX_EVIDENCE_CHARS,
+                        max_context_chunks=self.client.settings.top_k * 2,
+                        query_context=query,
+                        existing_chunk_ids=tuple(collected),
+                    )
+                    found = SearchResult.model_validate(bundle_adapter(bundle))
+                    _record(trace, "search_bundle", attempt=attempt,
+                            groups=bundle["groups"], relations=bundle["relations"],
+                            gaps=bundle["gaps"], truncated=bundle["truncated"],
+                            omitted_chunk_ids=bundle["omitted_chunk_ids"],
+                            context_chars=bundle["context_chars"],
+                            evidence_chars=bundle["evidence_chars"],
+                            recovery=bundle.get("recovery", {}),
+                            pipeline=bundle.get("pipeline", {}))
+                else:
+                    found = SearchResult.model_validate(await self.search.search(query, filters))
                 _record(trace, "search", attempt=attempt, query=query, filters=filters.model_dump(mode="json"), evidence=[e.model_dump(mode="json") for e in found.evidence], missing_info=found.missing_info)
                 if found.clarification:
                     if checked:
