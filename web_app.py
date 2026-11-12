@@ -242,8 +242,14 @@ def create_app(*, engine: Any = None, backend: Any = None, state_path=None) -> F
         return {"chunk": view(chunk), "neighbors": [view(item) for item in neighbors]}
 
     @app.get("/", include_in_schema=False)
-    async def index():
-        return FileResponse(WEB_DIR / "index.html")
+    async def index(request: Request):
+        from workbench import owner
+        response = FileResponse(WEB_DIR / "index.html")
+        # Сессия появляется до первого задания: потеря первого POST-ответа
+        # не должна создавать нового владельца при повторе с тем же ключом.
+        owner(request, response)
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     from workbench import install_routes
     install_routes(app)

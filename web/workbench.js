@@ -15,7 +15,8 @@
     amendment: "Изменение",
     exception: "Исключение",
     other_edition: "Другая редакция",
-    procedure: "Порядок действий"
+    procedure: "Порядок действий",
+    relation: "Связанный фрагмент"
   };
   const node = (tag, text, cls) => {
     const n = document.createElement(tag);
@@ -65,7 +66,7 @@
     card.append(summary);
     const body = node("div", undefined, "statement-content");
     if (!statement.published) body.append(node("p", "Не включено в проверенный ответ.",
-    "unpublished-note"));
+      "unpublished-note"));
     const details = node("dl", undefined, "rule-details");
     const value = statement.value || {},
       subject = statement.subject || {};
@@ -109,11 +110,34 @@
       body.append(node("h4", "Ограничения и связанные изменения"));
       for (const c of statement.limitations) body.append(citation(c, context.openCitation));
     }
+    if (statement.relations?.length) {
+      body.append(node("h4", "Связи положений"));
+      const relationLabels = {
+        changes_provision: "Изменяет пункт",
+        defines_applicability: "Определяет условие применения",
+        supersedes_edition: "Сменяет редакцию",
+        establishes_exception: "Устанавливает исключение",
+        possible_exception_to: "Возможное исключение",
+        references_provision: "Ссылается на положение"
+      };
+      for (const relation of statement.relations) {
+        const view = node("details", undefined, "source-relation");
+        view.append(node("summary", (relationLabels[relation.kind] || relation.kind) + " · " + (relation
+          .type_status === "candidate" ? "кандидат связи" : "связь источников")));
+        view.append(node("p", relation.confidence === "explicit" ?
+          "В тексте есть явная формулировка. Тип связи требует проверки." :
+          "Эвристическая гипотеза связи; это не установленный юридический факт."));
+        view.append(citation(relation.source, context.openCitation), citation(relation.target, context
+          .openCitation));
+        for (const proof of relation.proofs) view.append(citation(proof, context.openCitation));
+        body.append(view);
+      }
+    }
     for (const reason of statement.check.reasons || []) body.append(node("p", reason, "check-reason"));
     body.append(node("p", statement.check.semantic_checked ?
       "Смысловая связь проверена моделью; проверка может ошибаться." :
       "Смысловая проверка не выполнена.", "check-reason"));
-    const refs = [...(statement.supports || []), ...(statement.limitations || [])];
+    const refs = comparisonRefs(statement);
     if (refs.length > 1) body.append(button("Сравнить положения рядом", () => showComparison(statement,
       context)));
     body.append(button("Изменить обстоятельства и проверить", () => {
@@ -122,6 +146,12 @@
     }));
     card.append(body);
     return card;
+  }
+
+  function comparisonRefs(statement) {
+    const refs = [...(statement.supports || []), ...(statement.limitations || []), ...(statement
+      .relations || []).flatMap(r => [r.source, r.target, ...r.proofs])];
+    return [...new Map(refs.map(r => [r.chunk_id + "\0" + r.quote, r])).values()];
   }
 
   function dateText(value) {
@@ -165,7 +195,14 @@
 
   function showComparison(statement, context) {
     const d = dialog("Сравнение оснований и условий");
-    const refs = [...(statement.supports || []), ...(statement.limitations || [])];
+    const refs = comparisonRefs(statement);
+    const change = (statement.relations || []).find(r => r.kind === "changes_provision" || r.kind ===
+      "supersedes_edition");
+    const refIndex = citation => refs.findIndex(r => r.chunk_id === citation?.chunk_id && r.quote ===
+      citation.quote);
+    // В контракте №1 направление изменения: исходный пункт → новая редакция.
+    const originalIndex = change ? refIndex(change.source) : 0;
+    const changeIndex = change ? refIndex(change.target) : refs.findIndex(r => r.role === "amendment");
     d.append(node("p", "Применимость определяет движок. Здесь показаны положения выбранного ответа."));
     const grid = node("div", undefined, "comparison-grid");
     for (let column = 0; column < 2; column++) {
@@ -178,7 +215,7 @@
         option.value = i;
         select.append(option);
       });
-      select.value = String(column ? Math.max(1, refs.findIndex(r => r.role === "amendment")) : 0);
+      select.value = String(column ? (changeIndex >= 0 ? changeIndex : 1) : Math.max(0, originalIndex));
       const content = node("div");
       const render = () => {
         const r = refs[Number(select.value)];
@@ -196,16 +233,17 @@
       grid.append(pane);
       render();
     }
-    d.append(grid, node("h3", "Обстоятельства сценария"));
-    const scenario = readScenario();
+    d.append(grid, node("h3", "Обстоятельства проверенного ответа"));
+    const scenario = context.scenario || {};
     for (const kind of ["contract_signed", "specification_signed", "delivery", "event"]) {
       if (scenario[kind]) d.append(node("p", ({
         contract_signed: "Подписание договора",
         specification_signed: "Подписание спецификации",
         delivery: "Поставка",
         event: "Событие"
-      } [kind]) + ": " + scenario[kind]));
+      } [kind]) + ": " + dateText(scenario[kind])));
     }
+    d.append(node("p", "Повторная проверка использует текущие значения формы обстоятельств."));
     for (const c of statement.conditions || []) d.append(node("p", c.text + ": " + ({
       met: "установлено",
       not_met: "не выполнено",
@@ -315,7 +353,7 @@
             ].filter(x => x[1])) {
             row.append(node("h4", label), node("p", r.answer.text), node("p",
               `Задержка: ${r.duration_ms??"нет данных"} мс · вызовы: ${JSON.stringify(r.calls)} · ошибки формата: ${r.format_errors}`
-              ));
+            ));
             for (const issue of r.rejections || []) row.append(node("p", "Отброшено: " + issue.reason));
             for (const error of r.errors || []) row.append(node("p", "Ошибка: " + error.kind + " · " + (
               error.message || "")));
@@ -331,7 +369,7 @@
               sb = sourceKeys(paired);
             row.append(node("p",
               `Источники: добавлено ${difference(sb,sa).length}, убрано ${difference(sa,sb).length}`
-              ));
+            ));
             for (const k of difference(sb, sa)) row.append(node("p", "+ " + sb.get(k).document_title +
               ", " + sb.get(k).section));
             for (const k of difference(sa, sb)) row.append(node("p", "− " + sa.get(k).document_title +
@@ -377,11 +415,11 @@
             "Сохранить оценку", async () => {
               try {
                 await api(
-                `/api/runs/${run.run_id}/cases/${encodeURIComponent(record.id)}/rating`, {
-                  correctness: rating.value,
-                  unnecessary_refusal: refusal.value === "" ? null : refusal.value === "true",
-                  note: note.value
-                }, "PATCH");
+                  `/api/runs/${run.run_id}/cases/${encodeURIComponent(record.id)}/rating`, {
+                    correctness: rating.value,
+                    unnecessary_refusal: refusal.value === "" ? null : refusal.value === "true",
+                    note: note.value
+                  }, "PATCH");
                 status.textContent = "Оценка сохранена.";
               } catch (e) {
                 status.textContent = e.message;

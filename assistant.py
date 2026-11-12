@@ -414,6 +414,7 @@ class LegalAssistant:
             async with asyncio.timeout(self.client.settings.question_timeout):
                 result = await self._answer(messages, as_of, trace, scenario)
         except BudgetExhausted:
+            _record(trace, "error", kind="BudgetExhausted", message="request verification budget")
             result = Answer(status="error", text="Исчерпан бюджет проверки ответа. Основания не проверены полностью.")
         except (ModelAPIError, TimeoutError) as exc:
             _record(trace, "error", kind=type(exc).__name__, message="API/timeout")
@@ -427,13 +428,29 @@ class LegalAssistant:
             _record(trace, "error", kind=type(exc).__name__, message="search component")
             logger.error("answer: техническая ошибка поискового компонента")
             result = Answer(status="error", text="Техническая ошибка поискового компонента. Основания в базе не проверены.")
+        control = current_control()
+        if result.status == "error" and control:
+            retained = [(key, s) for key, s in control.statements.items()
+                        if s.check.mechanical_pass and s.check.semantic_checked
+                        and s.check.status in {"confirmed", "conditional"} and s.supports]
+            if retained:
+                gap = "Дополнительная проверка прервана технической ошибкой или лимитом; полнота оснований и ограничений не установлена"
+                control.published = {key for key, _ in retained}
+                result = Answer(status="partial", text="\n".join(f"{s.text} [{i+1}]" for i, (_, s) in enumerate(retained)) + "\n" + gap + ".",
+                                citations=[c.model_copy(update={"claim_index": i}) for i, (_, s) in enumerate(retained) for c in s.supports],
+                                missing_info=[gap])
         return result
 
     async def _structured(self, prompt, data, schema):
         control = current_control()
         if control:
             control.model(schema.__name__)
-        return await self.client.structured(prompt, data, schema)
+            control.reserved_model_calls += 1
+        try:
+            return await self.client.structured(prompt, data, schema)
+        finally:
+            if control:
+                control.reserved_model_calls -= 1
 
     async def _verdict(self, data, count):
         verdict = await self._structured(VERIFY_PROMPT, data, Verdict)
@@ -540,7 +557,7 @@ class LegalAssistant:
         if intent.action == "clarify":
             question = intent.clarification or "Уточните договор, контрагента и дату рассматриваемого события."
             return Answer(status="clarify", text=question, missing_info=[question])
-        filters = intent.filters
+        filters = intent.filters.model_copy(update={"purpose": "grounds", "anchor_document_ids": []})
         if scenario is not None:
             supplied = ScenarioDates.model_validate(scenario)
             merged = filters.scenario.model_copy(deep=True)
@@ -576,12 +593,44 @@ class LegalAssistant:
                 if query in query_history:
                     break
                 query_history.add(query)
-                search_filters = filters if not attempt else filters.model_copy(update={"purpose": "limitations", "anchor_document_ids": list(dict.fromkeys(e.document_id for e in collected.values()))})
-                current_control().search(search_filters.purpose)
-                found = SearchResult.model_validate(await self.search.search(query, search_filters))
+                search_filters = filters if not attempt else filters.model_copy(update={"purpose": "limitations", "anchor_document_ids": list(dict.fromkeys(e.document_id for e in collected.values()))[:20]})
+                control = current_control()
+                bundle_search = getattr(self.search, "search_bundle", None)
+                bundle_adapter = getattr(self.search, "bundle_result", None)
+                if callable(bundle_search) and callable(bundle_adapter):
+                    parts = list(dict.fromkeys((intent.parts if not attempt else targets) or intent.parts))
+                    available = control.max_searches - control.searches
+                    limit = max(1, available - (1 if not attempt and available > 1 else 0))
+                    selected_parts = parts[:limit]
+                    control.query_parts_omitted += [p for p in parts[len(selected_parts):] if p not in control.query_parts_omitted]
+                    for _ in selected_parts:
+                        control.search(search_filters.purpose)
+                    bundle = await bundle_search(
+                        selected_parts, search_filters,
+                        top_k=self.client.settings.top_k,
+                        max_context_chars=MAX_EVIDENCE_CHARS,
+                        max_context_chunks=self.client.settings.top_k * 2,
+                        query_context=query,
+                        existing_chunk_ids=tuple(collected),
+                        recovery_rounds=0, recovery_query_budget=0,
+                    )
+                    found = SearchResult.model_validate(bundle_adapter(bundle))
+                    _record(trace, "search_bundle", attempt=attempt,
+                            groups=bundle["groups"], relations=bundle["relations"],
+                            gaps=bundle["gaps"], truncated=bundle["truncated"],
+                            omitted_chunk_ids=bundle["omitted_chunk_ids"],
+                            context_chars=bundle["context_chars"],
+                            evidence_chars=bundle["evidence_chars"],
+                            query_parts_omitted=parts[len(selected_parts):],
+                            recovery=bundle.get("recovery", {}),
+                            pipeline=bundle.get("pipeline", {}))
+                else:
+                    control.search(search_filters.purpose)
+                    found = SearchResult.model_validate(await self.search.search(query, search_filters))
                 if attempt:
-                    current_control().limitation_search_done = True
+                    control.limitation_search_done = True
                 _record(trace, "search", attempt=attempt, purpose=search_filters.purpose, query=query, filters=search_filters.model_dump(mode="json"), evidence=[e.model_dump(mode="json") for e in found.evidence], missing_info=found.missing_info)
+
                 if found.clarification:
                     if checked:
                         return _response(checked, gaps + [found.clarification], context_evidence, filters, intent, reference)

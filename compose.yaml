@@ -6,6 +6,7 @@ services:
     environment:
       DATA_DIR: /app/data
       WEB_STATE_DIR: /state
+      OTOROP_KNOWLEDGE_CACHE_DIR: ${OTOROP_KNOWLEDGE_CACHE_DIR:-/state/knowledge}
       OTOROP_EMBEDDING_CACHE_DIR: ${OTOROP_EMBEDDING_CACHE_DIR:-/tmp/otorop/embeddings}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}

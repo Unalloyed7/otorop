@@ -163,6 +163,7 @@
       const statements = element("section", "statement-list");
       statements.setAttribute("aria-label", "Проверяемые утверждения");
       for (const statement of answer.statements) statements.append(LegalWorkbench.statementCard(statement, {
+        scenario: answer.scenario || {},
         openCitation,
         recheck: () => sendQuestion(true)
       }));

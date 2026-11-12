@@ -206,6 +206,23 @@ async def test_budget_preserves_prior_verified_part(settings, evidence):
     assert any("лимит" in gap.lower() for gap in answer.missing_info)
 
 
+async def test_deadline_preserves_already_checked_statement(settings, evidence):
+    class SlowLimitations:
+        async def search(self, query, filters):
+            if filters.purpose == "limitations":
+                await asyncio.Event().wait()
+            from schemas import SearchResult
+            return SearchResult(evidence=[evidence])
+
+    client = FakeClient(settings.model_copy(update={"question_timeout": .05}), intent(), draft(evidence), {"supported": [0]})
+    trace = {"stages": []}
+    answer = await LegalAssistant(SlowLimitations(), client).answer("Срок оплаты?", trace=trace)
+    assert answer.status == "partial" and answer.citations
+    assert answer.statements[0].published and answer.statements[0].check.semantic_checked
+    assert "прервана" in answer.text
+    assert any(s.get("kind") == "TimeoutError" for s in trace["stages"])
+
+
 async def test_json_schema_instead_of_instance_only_gets_one_repair(settings):
     requests = []
     def handler(request):

@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "description": "Ручной эталон связей для ограниченной выборки источников базы организаторов; это не полный эталон всего корпуса.",
+  "scopes": [
+    {
+      "name": "П-17/2024: изменение пункта 3.2",
+      "support_source_file": "документы компании__Доп соглашение 1 к договору П-17-2024.txt",
+      "support_text_contains": "Изложить пункт 3.2 договора в следующей редакции:",
+      "expected": [
+        {
+          "type": "changes_provision",
+          "from_source_file": "документы компании__Договор поставки П-17-2024 Альфа-Трейд.txt",
+          "from_section": "3.2",
+          "to_source_file": "документы компании__Доп соглашение 1 к договору П-17-2024.txt",
+          "to_section": "3.2",
+          "target_reference": "3.2"
+        },
+        {
+          "type": "amends",
+          "from_source_file": "документы компании__Доп соглашение 1 к договору П-17-2024.txt",
+          "from_section": "3.2",
+          "to_source_file": "документы компании__Договор поставки П-17-2024 Альфа-Трейд.txt",
+          "to_section": "3.2",
+          "target_reference": "3.2"
+        }
+      ]
+    },
+    {
+      "name": "П-17/2024: дата применения нового адреса",
+      "support_source_file": "документы компании__Доп соглашение 1 к договору П-17-2024.txt",
+      "support_text_contains": "Новый адрес доставки применяется к партиям Товара",
+      "expected": [
+        {
+          "type": "defines_applicability",
+          "from_source_file": "документы компании__Доп соглашение 1 к договору П-17-2024.txt",
+          "from_section": "3.2",
+          "to_source_file": "документы компании__Доп соглашение 1 к договору П-17-2024.txt",
+          "to_section": "3.2",
+          "target_reference": "3.2"
+        }
+      ]
+    },
+    {
+      "name": "Регламент 2025 заменяет редакцию 2023",
+      "support_source_file": "документы компании__Регламент согласования договоров ред 2025.txt",
+      "support_text_contains": "Редакция от 10.01.2023 утрачивает силу.",
+      "expected": [
+        {"type":"supersedes_edition","from_source_file":"документы компании__Регламент согласования договоров ред 2023 (утратил силу).txt","from_section":"1","to_source_file":"документы компании__Регламент согласования договоров ред 2025.txt","to_section":"1","target_reference":"1"},
+        {"type":"supersedes_edition","from_source_file":"документы компании__Регламент согласования договоров ред 2023 (утратил силу).txt","from_section":"1.1","to_source_file":"документы компании__Регламент согласования договоров ред 2025.txt","to_section":"1.1","target_reference":"1.1"},
+        {"type":"supersedes_edition","from_source_file":"документы компании__Регламент согласования договоров ред 2023 (утратил силу).txt","from_section":"1.2","to_source_file":"документы компании__Регламент согласования договоров ред 2025.txt","to_section":"1.2","target_reference":"1.2"},
+        {"type":"supersedes_edition","from_source_file":"документы компании__Регламент согласования договоров ред 2023 (утратил силу).txt","from_section":"1.3","to_source_file":"документы компании__Регламент согласования договоров ред 2025.txt","to_section":"1.3","target_reference":"1.3"},
+        {"type":"supersedes_edition","from_source_file":"документы компании__Регламент согласования договоров ред 2023 (утратил силу).txt","from_section":"2","to_source_file":"документы компании__Регламент согласования договоров ред 2025.txt","to_section":"2","target_reference":"2"},
+        {"type":"supersedes_edition","from_source_file":"документы компании__Регламент согласования договоров ред 2023 (утратил силу).txt","from_section":"2.1","to_source_file":"документы компании__Регламент согласования договоров ред 2025.txt","to_section":"2.1","target_reference":"2.1"},
+        {"type":"supersedes_edition","from_source_file":"документы компании__Регламент согласования договоров ред 2023 (утратил силу).txt","from_section":"2.2","to_source_file":"документы компании__Регламент согласования договоров ред 2025.txt","to_section":"2.2","target_reference":"2.2"},
+        {"type":"supersedes_edition","from_source_file":"документы компании__Регламент согласования договоров ред 2023 (утратил силу).txt","from_section":"2.3","to_source_file":"документы компании__Регламент согласования договоров ред 2025.txt","to_section":"2.3","target_reference":"2.3"},
+        {"type":"supersedes_edition","from_source_file":"документы компании__Регламент согласования договоров ред 2023 (утратил силу).txt","from_section":"2.4","to_source_file":"документы компании__Регламент согласования договоров ред 2025.txt","to_section":"2.4","target_reference":"2.4"},
+        {"type":"supersedes_edition","from_source_file":"документы компании__Регламент согласования договоров ред 2023 (утратил силу).txt","from_section":"3","to_source_file":"документы компании__Регламент согласования договоров ред 2025.txt","to_section":"3","target_reference":"3"},
+        {"type":"supersedes_edition","from_source_file":"документы компании__Регламент согласования договоров ред 2023 (утратил силу).txt","from_section":"3.1","to_source_file":"документы компании__Регламент согласования договоров ред 2025.txt","to_section":"3.1","target_reference":"3.1"},
+        {"type":"supersedes_edition","from_source_file":"документы компании__Регламент согласования договоров ред 2023 (утратил силу).txt","from_section":"3.2","to_source_file":"документы компании__Регламент согласования договоров ред 2025.txt","to_section":"3.2","target_reference":"3.2"},
+        {"type":"supersedes_edition","from_source_file":"документы компании__Регламент согласования договоров ред 2023 (утратил силу).txt","from_section":"4","to_source_file":"документы компании__Регламент согласования договоров ред 2025.txt","to_section":"4","target_reference":"4"},
+        {"type":"supersedes_edition","from_source_file":"документы компании__Регламент согласования договоров ред 2023 (утратил силу).txt","from_section":"4.1","to_source_file":"документы компании__Регламент согласования договоров ред 2025.txt","to_section":"4.1","target_reference":"4.1"}
+      ]
+    },
+    {
+      "name": "Письмо комплаенс дополняет п. 5.4",
+      "support_source_file": "документы компании__Письмо комплаенс-службы К-12 от 15.04.2025.txt",
+      "support_text_contains": "Требование применяется в дополнение к порядку, установленному п. 5.4",
+      "expected": [
+        {
+          "type": "supplements_procedure",
+          "from_source_file": "документы компании__Письмо комплаенс-службы К-12 от 15.04.2025.txt",
+          "from_section": "",
+          "to_source_file": "документы компании__Регламент согласования договоров ред 2025.txt",
+          "to_section": "5.4",
+          "target_reference": "5.4"
+        }
+      ]
+    }
+  ]
+}

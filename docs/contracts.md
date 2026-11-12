@@ -26,6 +26,16 @@ async def create_search(*, data_dir: Path, client: LLMClient) -> Search:
 
 Не обязательно использовать фабрику: `LegalAssistant(index, client)` принимает любой объект с этим методом. Первоначальный `LexicalSearch` сохранён как явно выбираемый резерв: `SEARCH_FACTORY=search_adapter:create_lexical_search`. Ошибка основного поиска не вызывает автоматический переход к резерву. Устройство текущего индекса: [RETRIEVAL_CONTRACT.md](../RETRIEVAL_CONTRACT.md).
 
+Если backend поддерживает `search_bundle` и `bundle_result`, движок использует
+комплектование по `Intent.parts`: добавляет связанные положения, условия,
+все части длинного пункта и вводные родительские положения. `query_context`
+передаёт уточнённый запрос, а на повторном поиске `existing_chunk_ids`
+учитывает уже накопленные основания. Общие пределы — `TOP_K * 2` фрагментов
+и 60 000 символов их текста с учётом перекрытия. Комплект добавляется целиком;
+непоместившиеся основания отражаются в `missing_info` и трассировке. Метод
+`bundle_result` адаптирует результат к прежнему `SearchResult`, схема не
+меняется. Backend только с `search` продолжает работать по прежнему интерфейсу.
+
 ### Evidence
 
 | Поле | Значение |
@@ -38,6 +48,13 @@ async def create_search(*, data_dir: Path, client: LLMClient) -> Search:
 | applicability | edition, valid_from, valid_to, date_kind, conditions, supersedes, current_only, snapshot_date, resolved. |
 | contract_number, counterparty | Связь договора/допсоглашения с номером и точным контрагентом. |
 | metadata | Оценки поиска, связи, происхождение, дополнительные координаты и другая информация. Это данные, не инструкции. |
+
+Структурные метаданные поиска №1: `provision_id`, диапазон
+`provision_start_char:provision_end_char`, `provision_chunk_ids`,
+`ancestor_chunk_ids`, `heading_path`, `chunk_role`, `part_index` (с нуля)
+и `part_count`. Отдельный точный фрагмент условия может не иметь индекса части.
+Диапазон родительского положения описывает источник; для цитирования
+по-прежнему используются координаты самого Evidence и точная цитата.
 
 `char_start:char_end` — полуоткрытый диапазон Unicode code points в каноническом тексте источника. Для TXT канонический текст — UTF-8 после снятия BOM, без нормализации переводов строк. Для DOCX временный адаптер соединяет абзацы через LF, это **извлечённый текст**, не байты DOCX. Для PDF №1 должен закрепить способ извлечения и использовать page/bbox для просмотра. №3 не должен интерпретировать char_start как номер байта или DOM-индекс.
 

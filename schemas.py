@@ -1,7 +1,8 @@
-"""Общий контракт поиска и ответа v1. Координаты относятся к исходному тексту."""
+"""Общий контракт поиска и проверяемого ответа v2. Координаты — в исходном тексте."""
 from __future__ import annotations
 
 from datetime import date, timedelta
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
@@ -145,7 +146,7 @@ class Citation(Model):
     coordinates: Coordinates
     edition: str = Field(min_length=1)
     claim_index: int = Field(ge=0)
-    role: Literal["support", "restriction", "contradiction", "amendment", "exception", "other_edition", "procedure"] = "support"
+    role: Literal["support", "restriction", "contradiction", "amendment", "exception", "other_edition", "procedure", "relation"] = "support"
     applicability: Applicability | None = None
 
 
@@ -164,6 +165,16 @@ class RuleValue(Model):
     day_type: Literal["calendar", "working", "unspecified"] = "unspecified"
     counted_from: str | None = None
     action: str | None = None
+
+    @field_validator("amount", "duration")
+    @classmethod
+    def numerical_value(cls, value):
+        if value is None or not value.strip():
+            return None
+        normalized = re.sub(r"\s+", "", value).replace(",", ".")
+        if len(normalized) > 100 or not re.fullmatch(r"[+-]?\d+(?:\.\d+)?", normalized):
+            raise ValueError("Числовое значение должно содержать число или null")
+        return normalized
 
 
 class RulePeriod(Model):
@@ -196,6 +207,17 @@ class Condition(Model):
     citations: list[Citation] = Field(default_factory=list)
 
 
+class SourceRelation(Model):
+    relation_id: str
+    kind: str
+    confidence: str
+    type_status: str = "candidate"
+    semantic_status: str | None = None
+    source: Citation
+    target: Citation
+    proofs: list[Citation] = Field(min_length=1)
+
+
 class VerifiedStatement(Model):
     statement_id: str
     text: str
@@ -206,6 +228,7 @@ class VerifiedStatement(Model):
     period: RulePeriod | None = None
     supports: list[Citation] = Field(default_factory=list)
     limitations: list[Citation] = Field(default_factory=list)
+    relations: list[SourceRelation] = Field(default_factory=list)
     check: StatementCheck
     published: bool = False
 

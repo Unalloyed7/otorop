@@ -21,9 +21,13 @@ T = TypeVar("T", bound=BaseModel)
 
 def remap_references(value, documents, chunks):
     if isinstance(value, dict):
-        if isinstance(value.get("chunk_id"), str) and isinstance(value.get("document_id"), str):
-            value["chunk_id"] = chunks.get(value["chunk_id"], value["chunk_id"])
-            value["document_id"] = documents.get(value["document_id"], value["document_id"])
+        for key, item in list(value.items()):
+            mapping = chunks if key.endswith("chunk_id") or key.endswith("chunk_ids") else (documents if key.endswith("document_id") or key.endswith("document_ids") else None)
+            if mapping is not None:
+                if isinstance(item, str):
+                    value[key] = mapping.get(item, item)
+                elif isinstance(item, list):
+                    value[key] = [mapping.get(i, i) if isinstance(i, str) else i for i in item]
         for child in value.values():
             remap_references(child, documents, chunks)
     elif isinstance(value, list):
@@ -50,6 +54,8 @@ def compact_evidence(data: dict) -> tuple[dict, dict, dict]:
             passage.update({k: v for k, v in common.items() if documents[document_alias].get(k) != v})
         passages.append(passage)
     result["documents"], result["evidence"] = documents, passages
+    remap_references(result["documents"], document_ids, chunk_ids)
+    remap_references(result["evidence"], document_ids, chunk_ids)
     for key in ("claims", "previous_claims"):
         remap_references(result.get(key, []), document_ids, chunk_ids)
     return result, {v: k for k, v in document_ids.items()}, {v: k for k, v in chunk_ids.items()}
@@ -226,6 +232,9 @@ class LLMClient:
 
     async def structured(self, instruction: str, data: dict, schema: type[T]) -> T:
         from execution import current_control
+        control = current_control()
+        if control is not None and not control.reserved_model_calls:
+            control.model(schema.__name__)
         try:
             return await self._structured_once(instruction, data, schema)
         except ModelProtocolError as exc:

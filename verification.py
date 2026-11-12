@@ -5,7 +5,7 @@ import hashlib
 import re
 
 from date_context import governing_span, scenario_for
-from schemas import Citation, Condition, RulePeriod, RuleValue, StatementCheck, Subject, VerifiedStatement
+from schemas import Citation, Condition, RulePeriod, RuleValue, SourceRelation, StatementCheck, Subject, Support, VerifiedStatement
 
 
 def linked_citations(supports, evidence, index=0, role="restriction"):
@@ -36,6 +36,45 @@ def linked_citations(supports, evidence, index=0, role="restriction"):
 
 def statement_key(claim):
     return "s-" + hashlib.sha256(claim.model_dump_json().encode()).hexdigest()[:16]
+
+
+def source_relations(claim, evidence):
+    from assistant import CitationError
+    sources = {e.chunk_id: e for e in evidence}
+    anchors = {s.chunk_id for s in [*claim.supports, *claim.limitations]}
+    result, seen = [], set()
+    for e in evidence:
+        for relation in e.metadata.get("provision_relations", []):
+            if not isinstance(relation, dict):
+                continue
+            ident = relation.get("relation_id")
+            left, right = relation.get("from_chunk_id"), relation.get("to_chunk_id")
+            if not ident or ident in seen or not anchors.intersection({left, right}) or left not in sources or right not in sources:
+                continue
+            quote = relation.get("quote")
+            if not isinstance(quote, str) or not quote.strip():
+                continue
+            try:
+                endpoints = [linked_citations([Support(chunk_id=i, document_id=sources[i].document_id, quote=sources[i].text)], evidence, role="relation")[0] for i in [left, right]]
+                proofs = []
+                for chunk_id in relation.get("supporting_chunk_ids", []):
+                    source = sources.get(chunk_id)
+                    if source:
+                        try:
+                            proofs += linked_citations([Support(document_id=source.document_id, chunk_id=chunk_id, quote=quote)], evidence, role="relation")
+                        except CitationError:
+                            continue
+                if not proofs:
+                    continue
+                result.append(SourceRelation(relation_id=ident, kind=relation.get("type", "references_provision"),
+                    confidence=relation.get("confidence", "inferred"), type_status=relation.get("type_status", "candidate"),
+                    semantic_status=(relation.get("semantic_validation") or {}).get("status"), source=endpoints[0], target=endpoints[1], proofs=proofs))
+                seen.add(ident)
+            except CitationError:
+                continue
+            if len(result) >= 16:
+                return result
+    return result
 
 
 def build_statement(claim, evidence, filters, *, citations=None, mechanical=True, semantic=None, reasons=(), published=False):
@@ -82,6 +121,6 @@ def build_statement(claim, evidence, filters, *, citations=None, mechanical=True
             left, right, kind = next(iter(periods))
             period = RulePeriod(valid_from=left, valid_to=right, date_kind=kind)
     return VerifiedStatement(statement_id=statement_key(claim), text=claim.text, subject=subject, rule=claim.rule,
-        value=value, conditions=conditions, period=period, supports=citations or [], limitations=limitations,
+        value=value, conditions=conditions, period=period, supports=citations or [], limitations=limitations, relations=source_relations(claim, evidence),
         check=StatementCheck(status=status, mechanical_pass=mechanical, semantic_checked=semantic is not None, reasons=why),
         published=published and mechanical and status in {"confirmed", "conditional"})

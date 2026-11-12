@@ -13,7 +13,6 @@ def _month_number(word):
     matches = [i + 1 for i, stem in enumerate(_MONTHS) if (word in {"май", "мая", "мае"} if i == 4 else word.startswith(stem))]
     return matches[0] if len(matches) == 1 else None
 
-
 def parse_date_span(value: str) -> DateSpan:
     text = value.strip().casefold()
     year_match = re.fullmatch(r"(?:в\s+)?(\d{4})(?:\s*(?:год|года|году|г\.?))?", text)
@@ -48,7 +47,7 @@ def parse_date_span(value: str) -> DateSpan:
 
 def scenario_for(filters: SearchFilters) -> ScenarioDates:
     result = filters.scenario.model_copy(deep=True)
-    aliases = {"specification_signed_at": "specification_signed", "document_signed": "contract_signed", "delivered": "delivery"}
+    aliases = {"specification_signed_at": "specification_signed", "contract_signed_at": "contract_signed", "document_signed": "contract_signed", "delivered": "delivery"}
     kind = aliases.get(filters.date_kind, filters.date_kind)
     if filters.event_date:
         kind = kind if kind in ScenarioDates.model_fields and kind != "facts" else "event"
@@ -64,16 +63,16 @@ def scenario_for(filters: SearchFilters) -> ScenarioDates:
 def governing_span(filters: SearchFilters, evidence=None) -> DateSpan | None:
     scenario = scenario_for(filters)
     if evidence is not None:
-        kind = evidence.applicability.date_kind
-        if kind in {"specification_signed", "specification_signed_at"}:
-            return scenario.specification_signed
+        kind = {"specification_signed_at": "specification_signed", "contract_signed_at": "contract_signed", "document_signed": "contract_signed"}.get(evidence.applicability.date_kind, evidence.applicability.date_kind)
+        if kind in {"specification_signed", "contract_signed", "delivery"}:
+            return getattr(scenario, kind)
     if filters.governing_date:
         return getattr(scenario, filters.governing_date)
     return scenario.event or scenario.contract_signed or scenario.delivery or scenario.specification_signed
 
 
 def condition_status(record: dict, scenario: ScenarioDates) -> str:
-    kind = {"specification_signed_at": "specification_signed", "signed_at": "contract_signed"}.get(record.get("kind"), record.get("kind"))
+    kind = {"specification_signed_at": "specification_signed", "contract_signed_at": "contract_signed", "signed_at": "contract_signed"}.get(record.get("kind"), record.get("kind"))
     span = getattr(scenario, kind, None) if kind in ScenarioDates.model_fields else None
     if not span or not record.get("date"):
         return "unknown"

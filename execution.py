@@ -15,8 +15,10 @@ class RunControl:
     models: int = 0
     searches: int = 0
     repairs: int = 0
+    reserved_model_calls: int = 0
     observer: object = None
     statements: dict = field(default_factory=dict)
+    query_parts_omitted: list = field(default_factory=list)
     limitation_search_done: bool = False
 
     def model(self, schema):
@@ -49,6 +51,7 @@ class RunControl:
     def summary(self):
         return {"model_calls": self.models, "search_calls": self.searches, "repair_calls": self.repairs,
                 "max_model_calls": self.max_models, "max_search_calls": self.max_searches,
+                "query_parts_omitted": self.query_parts_omitted,
                 "limitations_search_done": self.limitation_search_done}
 
 

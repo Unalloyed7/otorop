@@ -84,9 +84,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix="psb-browser-") as directory:
         data_dir = Path(directory)
         with zipfile.ZipFile(data_dir / "knowledge-base.zip", "w") as archive:
-            archive.writestr("документы компании__Тестовый договор Т-1-2026.txt", "ДОГОВОР ПОСТАВКИ № Т-1/2026\nг. Москва — 1 января 2026 г.\nООО «Тестовый поставщик»\n🙂 Проверка координат Unicode.\n4.2. Покупатель оплачивает товар в течение 30 календарных дней после подписания УПД.\n5.2. Гарантийный срок составляет 24 месяца с даты поставки.\n<script>window.compromised=true</script>\n")
+            archive.writestr("документы компании__Тестовый договор Т-1-2026.txt", "ДОГОВОР ПОСТАВКИ № Т-1/2026\nг. Москва — 1 января 2026 г.\nООО «Тестовый поставщик»\n🙂 Проверка координат Unicode.\n4.1. Все договоры согласуются с юридическим отделом.\n4.2. Покупатель оплачивает товар в течение 30 календарных дней после подписания УПД.\n5.2. Гарантийный срок составляет 24 месяца с даты поставки.\n<script>window.compromised=true</script>\n")
             archive.writestr("документы компании__Регламент типовых форм.txt", "РЕГЛАМЕНТ ТИПОВЫХ ФОРМ\n2.1. Все договоры согласуются с юридическим отделом.\n4.1. Типовая форма без изменений согласуется только с главным бухгалтером.\n")
-            archive.writestr("документы компании__Доп соглашение 1 к Т-1-2026.txt", "ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № 1\nк договору № Т-1/2026\n1. Для договора применяется правило согласования типовой формы.\n")
+            archive.writestr("документы компании__Доп соглашение 1 к Т-1-2026.txt", "ДОПОЛНИТЕЛЬНОЕ СОГЛАШЕНИЕ № 1\nк договору № Т-1/2026\nИзложить пункт 4.1 договора в следующей редакции:\n4.1. Типовая форма без изменений согласуется только с главным бухгалтером.\n1. Для договора применяется правило согласования типовой формы.\n")
         env = {k: v for k, v in os.environ.items() if k not in {"SEARCH_FACTORY", "RERANKER_MODEL", "EMB_MODEL", "OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL", "GEN_MODEL"}}
         env.update(DATA_DIR=str(data_dir), WEB_STATE_DIR=str(data_dir / "state"), LLM_BASE_URL=f"http://127.0.0.1:{proxy.server_port}/v1", LLM_API_KEY="test-only-key", LLM_MODEL="browser-test-model", API_RETRIES="0", VERIFY_ANSWER="1")
         port = free_port()
@@ -140,10 +140,13 @@ def main():
                     page.locator("#question").fill("Кто согласует типовой договор?")
                     page.get_by_role("button", name="Отправить вопрос").click()
                     expect(page.locator(".message-status")).to_have_text("Подтверждена часть")
-                    page.locator(".statement-card summary").click()
+                    page.locator(".statement-card > summary").click()
                     expect(page.locator(".statement-content")).to_contain_text("Нужно установить")
+                    assert page.locator(".source-relation").count() > 0
                     page.get_by_role("button", name="Сравнить положения рядом").click()
                     expect(page.locator("dialog .comparison-grid section")).to_have_count(2)
+                    expect(page.locator("dialog .comparison-grid section").first.locator("pre")).to_contain_text("юридическим отделом")
+                    expect(page.locator("dialog .comparison-grid section").last.locator("pre")).to_contain_text("главным бухгалтером")
                     page.screenshot(path=str(args.output / "desktop-proof-comparison.png"))
                     page.get_by_role("button", name="Закрыть", exact=True).click()
                     page.locator("#scenario-settings summary").click()
@@ -165,7 +168,7 @@ def main():
                     page.get_by_label("Первый запуск",exact=True).select_option(runs[0]["id"])
                     page.get_by_label("Второй запуск",exact=True).select_option(all_runs[0]["id"])
                     page.get_by_role("button",name="Показать различия").click()
-                    page.locator(".run-case summary").click()
+                    page.locator(".run-case > summary").click()
                     expect(page.locator(".run-case")).to_contain_text("Другой источник")
                     assert page.locator(".run-case img").count()==0
                     page.get_by_label("Ручная оценка корректности "+record["id"]).select_option("partial")
@@ -211,7 +214,7 @@ def main():
                     page.locator("#question").fill("Кто согласует типовой договор?")
                     page.get_by_role("button",name="Отправить вопрос").click()
                     expect(page.locator(".message-status")).to_have_text("Подтверждена часть")
-                    page.locator(".statement-card summary").click()
+                    page.locator(".statement-card > summary").click()
                     page.get_by_role("button",name="Сравнить положения рядом").click()
                     expect(page.locator("dialog .comparison-grid section")).to_have_count(2)
                     assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")

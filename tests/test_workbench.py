@@ -40,8 +40,12 @@ async def test_jobs_are_idempotent_owned_and_independent_of_connection():
     app = create_app(engine=engine)
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as a, httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as b:
+            bootstrap = await a.get("/")
+            assert bootstrap.status_code == 200 and "httponly" in bootstrap.headers["set-cookie"].lower()
+            original_cookie = a.cookies.get("psb_owner")
             first = await a.post("/api/jobs", json=payload())
             assert first.status_code == 202
+            assert a.cookies.get("psb_owner") == original_cookie
             job_id = first.json()["job_id"]
             await asyncio.wait_for(engine.started.wait(), 1)
             again = await a.post("/api/jobs", json=payload())

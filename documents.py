@@ -11,7 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from xml.etree import ElementTree as ET
 
-PROCESSOR_VERSION = "documents-v4"
+PROCESSOR_VERSION = "documents-v6"
 SUPPORTED_SUFFIXES = {".txt", ".md", ".docx"}
 
 _CONTRACT_RE = re.compile(
@@ -28,12 +28,18 @@ _WORD_DATE_RE = re.compile(
     r"сентября|октября|ноября|декабря)\s+(\d{4})\b",
     re.IGNORECASE,
 )
-_NUMBERED_LINE_RE = re.compile(
-    r"^\s*(?:(Статья)\s+)?(\d+(?:\.\d+){0,5})(?:[.)])?(?=\s|$)\s*(.*)$",
-    re.IGNORECASE,
-)
 _INLINE_REFERENCE_RE = re.compile(
     r"\b(?:пункт(?:а|е|ом)?|п\.|стать(?:я|и|е)|ст\.)\s*(\d+(?:\.\d+){0,5})",
+    re.IGNORECASE,
+)
+_AMENDMENT_ACTION_RE = re.compile(
+    r"\b(изложить|дополнить|исключить|заменить)\s+"
+    r"(?:пункт(?:а|е)?|п\.|статью|статьи)\s*(\d+(?:\.\d+){0,5})",
+    re.IGNORECASE,
+)
+_APPLICABILITY_VERB_RE = re.compile(
+    r"\b(?:применя(?:ется|ются)|распространя(?:ется|ются)|"
+    r"не\s+применя(?:ется|ются)|действу(?:ет|ют)|продлева(?:ется|ются))\b",
     re.IGNORECASE,
 )
 _MONTHS = {
@@ -89,6 +95,136 @@ def _first_date_with_source(pattern: str, text: str) -> tuple[str | None, str | 
         return None, None
     source = " ".join(text[anchor.start():anchor.end() + date_match.end()].split())
     return value, source
+
+
+def _collapsed_text_with_offsets(text: str) -> tuple[str, list[int], list[int]]:
+    collapsed: list[str] = []
+    starts: list[int] = []
+    ends: list[int] = []
+    index = 0
+    while index < len(text):
+        if text[index].isspace():
+            end = index + 1
+            while end < len(text) and text[end].isspace():
+                end += 1
+            if collapsed:
+                if collapsed[-1] == " ":
+                    ends[-1] = end
+                else:
+                    collapsed.append(" ")
+                    starts.append(index)
+                    ends.append(end)
+            index = end
+            continue
+        collapsed.append(text[index])
+        starts.append(index)
+        ends.append(index + 1)
+        index += 1
+    return "".join(collapsed), starts, ends
+
+
+def _sentence_start(text: str, position: int) -> int:
+    boundary = max(text.rfind(".", 0, position), text.rfind("!", 0, position), text.rfind("?", 0, position))
+    return boundary + 1
+
+
+def _sentence_end(text: str, position: int) -> int:
+    for match in re.finditer(r"[.!?]", text[position:]):
+        end = position + match.end()
+        if text[position + match.start()] == "." and re.search(
+            r"\bг$", text[position:position + match.start()], re.IGNORECASE
+        ):
+            following = text[end:].lstrip()
+            if following and following[0].islower():
+                continue
+        return end
+    return len(text)
+
+
+def _extract_applicability_conditions(text: str) -> list[dict[str, Any]]:
+    normalized, starts, ends = _collapsed_text_with_offsets(text)
+    conditions: list[dict[str, Any]] = []
+    seen_spans: set[tuple[int, int]] = set()
+    for verb in _APPLICABILITY_VERB_RE.finditer(normalized):
+        start = _sentence_start(normalized, verb.start())
+        end = _sentence_end(normalized, verb.end())
+        sentence = normalized[start:end].strip()
+        lower = sentence.casefold()
+        event_kind = None
+        for marker, kind in (
+            ("спецификац", "specification_signed_at"),
+            ("уведомлен", "notice"),
+            ("поставк", "delivery"),
+            ("событи", "event"),
+        ):
+            if marker in lower:
+                event_kind = kind
+                break
+        if event_kind is None and re.search(
+            r"(?:договор\w*[^.!?]{0,80}(?:подписан(?:а|о|ы)?|заключен(?:а|о|ы)?)\b|"
+            r"(?:подписан(?:а|о|ы)?|заключен(?:а|о|ы)?)\b[^.!?]{0,80}договор)",
+            sentence,
+            re.IGNORECASE,
+        ):
+            event_kind = "contract_signed_at"
+        has_boundary = bool(
+            _NUMERIC_DATE_RE.search(sentence)
+            or _WORD_DATE_RE.search(sentence)
+            or re.search(r"\bпри\s+отсутствии\s+уведомлен", sentence, re.IGNORECASE)
+        )
+        if not event_kind or not has_boundary:
+            continue
+        if not starts or not sentence:
+            continue
+        normalized_start = start + (len(normalized[start:end]) - len(normalized[start:end].lstrip()))
+        normalized_end = end - (len(normalized[start:end]) - len(normalized[start:end].rstrip()))
+        if normalized_start >= len(starts) or normalized_end <= 0:
+            continue
+        source_start = starts[normalized_start]
+        source_end = ends[normalized_end - 1]
+        if (source_start, source_end) in seen_spans:
+            continue
+        seen_spans.add((source_start, source_end))
+        source_text = text[source_start:source_end]
+        date_match = _NUMERIC_DATE_RE.search(source_text) or _WORD_DATE_RE.search(source_text)
+        before_date = source_text[:date_match.start()].casefold() if date_match else source_text.casefold()
+        if "при отсутствии уведомления" in before_date:
+            operator = "when_absent"
+            boundary_date = None
+        elif "не позднее" in before_date:
+            operator = "on_or_before"
+            boundary_date = _iso_date(date_match.group(0)) if date_match else None
+        elif "не ранее" in before_date or "начиная с" in before_date or re.search(r"\bс\s*$", before_date):
+            operator = "on_or_after"
+            boundary_date = _iso_date(date_match.group(0)) if date_match else None
+        elif re.search(r"\bпосле\b", before_date):
+            operator = "after"
+            boundary_date = _iso_date(date_match.group(0)) if date_match else None
+        elif re.search(r"\bдо\b", before_date):
+            operator = "before"
+            boundary_date = _iso_date(date_match.group(0)) if date_match else None
+        else:
+            operator = "unknown"
+            boundary_date = _iso_date(date_match.group(0)) if date_match else None
+        preceding = text[max(0, source_start - 1000):source_start]
+        actions = list(_AMENDMENT_ACTION_RE.finditer(preceding))
+        target_reference = actions[-1].group(2).rstrip(".") if actions else None
+        conditions.append({
+            "kind": event_kind,
+            "operator": operator,
+            "date": boundary_date,
+            "source_text": source_text,
+            "start_char": source_start,
+            "end_char": source_end,
+            "target_reference": target_reference,
+            "scope": "provision" if target_reference else "document",
+            "uncertainty": (
+                "Точный тип условия или его граница не распознаны."
+                if operator == "unknown" or (operator != "when_absent" and boundary_date is None)
+                else None
+            ),
+        })
+    return conditions
 
 
 def _extract_metadata(source_file: str, text: str) -> dict[str, Any]:
@@ -235,35 +371,7 @@ def _extract_metadata(source_file: str, text: str) -> dict[str, Any]:
             if re.match(r"^\s*(?:настоящая\s+)?редакция\b", line, re.I):
                 valid_from, valid_from_source = _first_date_with_source(r"действует\s+с", line)
                 valid_to, valid_to_source = _first_date_with_source(r"утратила\s+силу\s+с", line)
-    applicability_conditions: list[dict[str, str]] = []
-    if document_type == "amendment":
-        for line in text.splitlines():
-            if (
-                not re.search(r"(?:применя(?:ется|ются)|распространя(?:ется|ются))", line, re.IGNORECASE)
-                or not re.search(r"спецификац", line, re.IGNORECASE)
-            ):
-                continue
-            applicability_date = _iso_date(line)
-            if not applicability_date:
-                continue
-            source_text = " ".join(line.split())
-            numeric_date = _NUMERIC_DATE_RE.search(source_text)
-            word_date = _WORD_DATE_RE.search(source_text)
-            date_match = numeric_date or word_date
-            assert date_match is not None
-            lead = source_text[:date_match.start()].casefold()
-            if "после" in lead:
-                operator = "after"
-            elif re.search(r"\bдо\b", lead):
-                operator = "before"
-            else:
-                operator = "on_or_after"
-            applicability_conditions.append({
-                "kind": "specification_signed_at",
-                "operator": operator,
-                "date": applicability_date,
-                "source_text": source_text,
-            })
+    applicability_conditions = _extract_applicability_conditions(text)
 
     uncertainties: list[str] = []
     if renewal:
@@ -411,103 +519,12 @@ def load_documents(kb_path: str | Path) -> list[dict[str, Any]]:
     return documents
 
 
-def _split_long_range(text: str, start: int, end: int, max_chars: int, overlap: int) -> list[tuple[int, int]]:
-    ranges: list[tuple[int, int]] = []
-    cursor = start
-    while end - cursor > max_chars:
-        limit = cursor + max_chars
-        lower = cursor + max_chars * 2 // 3
-        boundary = max(text.rfind("\n", lower, limit), text.rfind(" ", lower, limit), text.rfind(". ", lower, limit))
-        if boundary <= cursor:
-            boundary = limit
-        piece_end = boundary + (1 if text[boundary:boundary + 1] == "." else 0)
-        ranges.append((cursor, piece_end))
-        cursor = max(cursor + 1, piece_end - overlap)
-        while cursor < end and text[cursor].isspace():
-            cursor += 1
-    if cursor < end:
-        ranges.append((cursor, end))
-    return ranges
-
-
-def split_document(
-    document: dict[str, Any],
-    max_chars: int = 1800,
-    overlap: int = 180,
-) -> list[dict[str, Any]]:
-    """Split text by numbered legal provisions and paragraphs without changing offsets."""
-    if max_chars < 200 or overlap < 0 or overlap >= max_chars:
-        raise ValueError("Ожидаются max_chars >= 200 и 0 <= overlap < max_chars.")
-    text = document["text"]
-    lines: list[tuple[int, int]] = []
-    offset = 0
-    for line in text.splitlines(keepends=True):
-        line_end = offset + len(line)
-        start = offset
-        end = line_end
-        while start < end and text[start].isspace():
-            start += 1
-        while end > start and text[end - 1].isspace():
-            end -= 1
-        if start < end:
-            lines.append((start, end))
-        offset = line_end
-    if offset < len(text):
-        start = offset
-        end = len(text)
-        while start < end and text[start].isspace():
-            start += 1
-        while end > start and text[end - 1].isspace():
-            end -= 1
-        if start < end:
-            lines.append((start, end))
-
-    chunks: list[dict[str, Any]] = []
-    heading_path: list[str] = []
-    current_locator: str | None = None
-    for start, end in lines:
-        line_text = text[start:end]
-        numbered = _NUMBERED_LINE_RE.match(line_text)
-        locator = current_locator
-        referenced_section: str | None = None
-        if numbered:
-            prefix = "Статья " if numbered.group(1) else ""
-            locator = f"{prefix}{numbered.group(2).rstrip('.')}"
-            current_locator = locator
-            depth = numbered.group(2).count(".") + 1
-            if len(heading_path) >= depth:
-                heading_path = heading_path[: depth - 1]
-            rest = numbered.group(3).strip()
-            if not rest or len(rest) < 90:
-                heading_path.append(line_text)
-        else:
-            inline_reference = _INLINE_REFERENCE_RE.search(line_text)
-            if inline_reference:
-                referenced_section = inline_reference.group(1).rstrip(".")
-                if (
-                    document["document_type"] == "amendment"
-                    and re.match(r"^\s*(?:изложить|дополнить|исключить|заменить)\b", line_text, re.IGNORECASE)
-                ):
-                    locator = referenced_section
-                    current_locator = locator
-        for piece_start, piece_end in _split_long_range(text, start, end, max_chars, overlap):
-            piece_text = text[piece_start:piece_end]
-            chunk_digest = hashlib.sha256(
-                f"{document['document_id']}\0{piece_start}\0{piece_end}\0{piece_text}".encode("utf-8")
-            ).hexdigest()[:24]
-            chunks.append({
-                **{key: value for key, value in document.items() if key != "text"},
-                "chunk_id": chunk_digest,
-                "section_reference": locator,
-                "referenced_section": referenced_section,
-                "heading_path": list(heading_path),
-                "text": piece_text,
-                "start_char": piece_start,
-                "end_char": piece_end,
-            })
-    if not chunks:
-        raise DocumentLoadError(f"Документ {document['source_file']!r} не содержит текста для индексации.")
-    for position, chunk in enumerate(chunks):
-        chunk["previous_chunk_id"] = chunks[position - 1]["chunk_id"] if position else None
-        chunk["next_chunk_id"] = chunks[position + 1]["chunk_id"] if position + 1 < len(chunks) else None
-    return chunks
+def split_document(document: dict[str, Any], max_chars: int = 1800, overlap: int = 180) -> list[dict[str, Any]]:
+    """Split complete legal provisions; preserve source coordinates and parents."""
+    from structural_chunking import split_structural_document
+    try:
+        return split_structural_document(document, max_chars=max_chars, overlap=overlap)
+    except ValueError as exc:
+        if not document.get("text", "").strip():
+            raise DocumentLoadError(str(exc)) from exc
+        raise

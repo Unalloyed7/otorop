@@ -899,7 +899,8 @@
               "amendment",
               "exception",
               "other_edition",
-              "procedure"
+              "procedure",
+              "relation"
             ],
             "title": "Role",
             "type": "string"
@@ -1327,6 +1328,64 @@
         "title": "ScenarioDates",
         "type": "object"
       },
+      "SourceRelation": {
+        "additionalProperties": false,
+        "properties": {
+          "relation_id": {
+            "title": "Relation Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "string"
+          },
+          "type_status": {
+            "default": "candidate",
+            "title": "Type Status",
+            "type": "string"
+          },
+          "semantic_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Semantic Status"
+          },
+          "source": {
+            "$ref": "#/$defs/Citation"
+          },
+          "target": {
+            "$ref": "#/$defs/Citation"
+          },
+          "proofs": {
+            "items": {
+              "$ref": "#/$defs/Citation"
+            },
+            "minItems": 1,
+            "title": "Proofs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "relation_id",
+          "kind",
+          "confidence",
+          "source",
+          "target",
+          "proofs"
+        ],
+        "title": "SourceRelation",
+        "type": "object"
+      },
       "StatementCheck": {
         "additionalProperties": false,
         "properties": {
@@ -1465,6 +1524,13 @@
               "$ref": "#/$defs/Citation"
             },
             "title": "Limitations",
+            "type": "array"
+          },
+          "relations": {
+            "items": {
+              "$ref": "#/$defs/SourceRelation"
+            },
+            "title": "Relations",
             "type": "array"
           },
           "check": {
@@ -1693,7 +1759,8 @@
               "amendment",
               "exception",
               "other_edition",
-              "procedure"
+              "procedure",
+              "relation"
             ],
             "title": "Role",
             "type": "string"
@@ -1994,6 +2061,64 @@
         "title": "RuleValue",
         "type": "object"
       },
+      "SourceRelation": {
+        "additionalProperties": false,
+        "properties": {
+          "relation_id": {
+            "title": "Relation Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "string"
+          },
+          "type_status": {
+            "default": "candidate",
+            "title": "Type Status",
+            "type": "string"
+          },
+          "semantic_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Semantic Status"
+          },
+          "source": {
+            "$ref": "#/$defs/Citation"
+          },
+          "target": {
+            "$ref": "#/$defs/Citation"
+          },
+          "proofs": {
+            "items": {
+              "$ref": "#/$defs/Citation"
+            },
+            "minItems": 1,
+            "title": "Proofs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "relation_id",
+          "kind",
+          "confidence",
+          "source",
+          "target",
+          "proofs"
+        ],
+        "title": "SourceRelation",
+        "type": "object"
+      },
       "StatementCheck": {
         "additionalProperties": false,
         "properties": {
@@ -2132,6 +2257,13 @@
           "$ref": "#/$defs/Citation"
         },
         "title": "Limitations",
+        "type": "array"
+      },
+      "relations": {
+        "items": {
+          "$ref": "#/$defs/SourceRelation"
+        },
+        "title": "Relations",
         "type": "array"
       },
       "check": {
@@ -2326,6 +2458,305 @@
       "end_exclusive"
     ],
     "title": "DateSpan",
+    "type": "object"
+  },
+  "SourceRelation": {
+    "$defs": {
+      "Applicability": {
+        "additionalProperties": false,
+        "properties": {
+          "edition": {
+            "minLength": 1,
+            "title": "Edition",
+            "type": "string"
+          },
+          "valid_from": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid From"
+          },
+          "valid_to": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Valid To"
+          },
+          "date_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date Kind"
+          },
+          "conditions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Conditions",
+            "type": "array"
+          },
+          "supersedes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Supersedes",
+            "type": "array"
+          },
+          "current_only": {
+            "default": false,
+            "title": "Current Only",
+            "type": "boolean"
+          },
+          "snapshot_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Snapshot Date"
+          },
+          "resolved": {
+            "default": false,
+            "title": "Resolved",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "edition"
+        ],
+        "title": "Applicability",
+        "type": "object"
+      },
+      "Citation": {
+        "additionalProperties": false,
+        "properties": {
+          "document_id": {
+            "minLength": 1,
+            "title": "Document Id",
+            "type": "string"
+          },
+          "chunk_id": {
+            "minLength": 1,
+            "title": "Chunk Id",
+            "type": "string"
+          },
+          "document_title": {
+            "minLength": 1,
+            "title": "Document Title",
+            "type": "string"
+          },
+          "section": {
+            "minLength": 1,
+            "title": "Section",
+            "type": "string"
+          },
+          "quote": {
+            "minLength": 1,
+            "title": "Quote",
+            "type": "string"
+          },
+          "coordinates": {
+            "$ref": "#/$defs/Coordinates"
+          },
+          "edition": {
+            "minLength": 1,
+            "title": "Edition",
+            "type": "string"
+          },
+          "claim_index": {
+            "minimum": 0,
+            "title": "Claim Index",
+            "type": "integer"
+          },
+          "role": {
+            "default": "support",
+            "enum": [
+              "support",
+              "restriction",
+              "contradiction",
+              "amendment",
+              "exception",
+              "other_edition",
+              "procedure",
+              "relation"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "applicability": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Applicability"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "document_id",
+          "chunk_id",
+          "document_title",
+          "section",
+          "quote",
+          "coordinates",
+          "edition",
+          "claim_index"
+        ],
+        "title": "Citation",
+        "type": "object"
+      },
+      "Coordinates": {
+        "additionalProperties": false,
+        "properties": {
+          "source_path": {
+            "minLength": 1,
+            "title": "Source Path",
+            "type": "string"
+          },
+          "char_start": {
+            "minimum": 0,
+            "title": "Char Start",
+            "type": "integer"
+          },
+          "char_end": {
+            "exclusiveMinimum": 0,
+            "title": "Char End",
+            "type": "integer"
+          },
+          "page": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Page"
+          },
+          "bbox": {
+            "anyOf": [
+              {
+                "maxItems": 4,
+                "minItems": 4,
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bbox"
+          }
+        },
+        "required": [
+          "source_path",
+          "char_start",
+          "char_end"
+        ],
+        "title": "Coordinates",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "relation_id": {
+        "title": "Relation Id",
+        "type": "string"
+      },
+      "kind": {
+        "title": "Kind",
+        "type": "string"
+      },
+      "confidence": {
+        "title": "Confidence",
+        "type": "string"
+      },
+      "type_status": {
+        "default": "candidate",
+        "title": "Type Status",
+        "type": "string"
+      },
+      "semantic_status": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Semantic Status"
+      },
+      "source": {
+        "$ref": "#/$defs/Citation"
+      },
+      "target": {
+        "$ref": "#/$defs/Citation"
+      },
+      "proofs": {
+        "items": {
+          "$ref": "#/$defs/Citation"
+        },
+        "minItems": 1,
+        "title": "Proofs",
+        "type": "array"
+      }
+    },
+    "required": [
+      "relation_id",
+      "kind",
+      "confidence",
+      "source",
+      "target",
+      "proofs"
+    ],
+    "title": "SourceRelation",
     "type": "object"
   }
 }
