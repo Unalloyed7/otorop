@@ -111,15 +111,22 @@ async def test_unknown_condition_remains_partial(settings, evidence):
 
 
 @pytest.mark.parametrize("mutation", ["unknown_chunk", "wrong_document", "inexact_quote", "invented_number"])
-async def test_invalid_citations_are_blocked(settings, evidence, mutation):
+async def test_invalid_sources_and_unsupported_claims_are_blocked(settings, evidence, mutation):
     response = draft(evidence)
     support = response["claims"][0]["supports"][0]
     if mutation == "unknown_chunk": support["chunk_id"] = "does-not-exist"
     if mutation == "wrong_document": support["document_id"] = "other-contract"
     if mutation == "inexact_quote": support["quote"] = "Оплата в течение 90 дней"
     if mutation == "invented_number": response["claims"][0]["text"] = "Оплата в течение 90 дней"
-    result = await LegalAssistant(FakeSearch([evidence]), FakeClient(settings, intent(), response)).answer("Срок?")
+    client = FakeClient(settings, intent(), response, {"supported": []})
+    trace = {}
+    result = await LegalAssistant(FakeSearch([evidence]), client).answer("Срок?", trace=trace)
     assert result.status == "insufficient" and not result.citations
+    if mutation == "invented_number":
+        assert len(client.requests) == 3
+        assert any(s.get("reason") == "semantic verifier" for s in trace["stages"])
+    else:
+        assert len(client.requests) == 2
 
 
 async def test_existing_quote_does_not_prove_conclusion(settings, evidence):

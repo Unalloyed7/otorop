@@ -1792,24 +1792,14 @@ class SchemaSearchBackend:
                 "queries_used": bundle.get("recovery", {}).get("queries_used", 0),
                 "query_budget": bundle.get("recovery", {}).get("query_budget", 0),
             }
-        missing = list(bundle["missing_parts"])
-        for group in groups:
-            coverage = group.get("coverage", {})
-            if group.get("missing") and group["part"] not in missing:
-                missing.append(group["part"])
-            if coverage.get("gaps", {}).get("status") == "present":
-                missing.append(
-                    f"Не разрешены ссылки/основания для части вопроса: {group['part']}"
-                )
-            if coverage.get("status") != "covered":
-                missing.append(
-                    "Матрица поиска для части "
-                    f"«{group['part']}»: основание={coverage.get('basis', {}).get('status')}; "
-                    f"условия={coverage.get('conditions', {}).get('status')}; "
-                    f"исключения={coverage.get('exceptions', {}).get('status')}; "
-                    f"неразрешённых пробелов={len(coverage.get('gaps', {}).get('items', []))}."
-                )
-        if bundle["truncated"]:
+        # Graph coverage describes the retrieved neighbourhood, not whether an
+        # answer follows from it. An unresolved reference in a neighbouring tax
+        # provision must not invalidate a self-contained employment rule.
+        # Per-source provision_gaps and coverage_by_part stay in model metadata;
+        # the complete bundle (including omissions) stays in the search trace.
+        # Draft/Verdict decide which missing sources matter to this question.
+        missing = list(dict.fromkeys(group["part"] for group in groups)) if not evidence else []
+        if not evidence and bundle["truncated"]:
             missing.append("Часть связанных оснований не поместилась в бюджет контекста; полный комплект не проверен")
         clarifications = list(dict.fromkeys(g["clarification"] for g in groups if g.get("clarification")))
         candidates = list(dict.fromkeys(p for g in groups for p in g.get("candidates", [])))

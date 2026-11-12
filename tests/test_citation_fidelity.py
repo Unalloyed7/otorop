@@ -28,10 +28,16 @@ def test_source_identifiers_are_not_financial_figures(evidence, text):
     "По договору № Т-9/2026 оплата — 30 календарных дней.",
     "По п. 4.20 оплата — 30 календарных дней.",
 ])
-def test_source_metadata_does_not_justify_a_new_amount_or_identifier(evidence, text):
+async def test_semantic_verdict_rejects_new_amount_or_wrong_identifier(settings, evidence, text):
     response = draft(evidence, text=text)
     response["claims"][0]["supports"][0]["quote"] = "Покупатель оплачивает товар в течение 30 календарных дней после подписания УПД."
-    with pytest.raises(CitationError): validate(response, evidence)
+    # The citation is real. Its legal meaning is a separate model decision.
+    client = FakeClient(settings, intent(), response, {"supported": []})
+    trace = {}
+    result = await LegalAssistant(FakeSearch([evidence]), client).answer("Оплата?", trace=trace)
+    assert result.status == "insufficient" and not result.citations
+    assert len(client.requests) == 3
+    assert any(s.get("reason") == "semantic verifier" for s in trace["stages"])
 
 
 async def test_whitespace_recovery_preserves_original_quote_and_coordinates(settings, evidence):
@@ -80,18 +86,25 @@ def test_numeric_values_from_separate_quotes_do_not_merge(evidence):
     ("Неустойка составляет 0,1% в день.", "Неустойка составляет 0.1% в день."),
     ("Плата составляет 450\u00a0000 рублей.", "Плата составляет 450000 рублей."),
 ])
-def test_equivalent_number_formats(evidence, source, claim):
+async def test_equivalent_number_formats_reach_semantic_verifier(settings, evidence, source, claim):
     e = evidence.model_copy(update={"text": source})
     response = draft(e, text=claim)
     response["claims"][0]["supports"][0]["quote"] = source
-    assert validate(response, e)
+    client = FakeClient(settings, intent(), response, {"supported": [0]})
+    result = await LegalAssistant(FakeSearch([e]), client).answer("Размер платежа?")
+    assert result.status == "answer"
+    assert len(client.requests) == 3
+    assert result.citations[0].quote == source
 
 
-def test_adjacent_numbers_cannot_justify_a_larger_amount(evidence):
+async def test_semantic_verdict_rejects_concatenated_numbers(settings, evidence):
     e = evidence.model_copy(update={"text": "Сроки: 10 30 дней."})
     response = draft(e, text="Срок — 1030 дней.")
     response["claims"][0]["supports"][0]["quote"] = e.text
-    with pytest.raises(CitationError): validate(response, e)
+    client = FakeClient(settings, intent(), response, {"supported": []})
+    result = await LegalAssistant(FakeSearch([e]), client).answer("Срок?")
+    assert result.status == "insufficient" and not result.citations
+    assert len(client.requests) == 3
 
 
 @pytest.mark.parametrize("include_period", [True, False])
@@ -111,17 +124,40 @@ async def test_historical_period_is_required_after_whitespace_recovery(settings,
 @pytest.mark.parametrize("source,text,accepted", [
     ("Испытание — не более шести месяцев, если иное не установлено законом.", "Испытание — не более 6 месяцев, если иное не установлено законом.", True),
     ("Приёмка — в течение пяти рабочих дней.", "Приёмка — в течение 5 рабочих дней.", True),
+    ("Гарантия составляет двадцать четыре месяца.", "Гарантия составляет 24 месяца.", True),
     ("Испытание — не более шести месяцев.", "Испытание — не более 3 месяцев.", False),
+    ("Испытание — не более шести месяцев.", "Испытание — не более 6 дней.", False),
     ("Срок составляет два дня.", "Срок составляет пять дней.", False),
     ("Гарантия составляет двадцать четыре месяца.", "Гарантия составляет 4 месяца.", False),
     ("Лимит — сто пять рублей.", "Лимит — 5 рублей.", False),
     ("Нужно предоставить сведения на семью.", "Плата составляет 7 рублей.", False),
 ])
-def test_small_word_numbers_keep_the_value_and_unit_context(evidence, source, text, accepted):
+async def test_value_and_unit_are_decided_by_semantic_verifier(settings, evidence, source, text, accepted):
     e = evidence.model_copy(update={"text": source})
     response = draft(e, text=text)
     response["claims"][0]["supports"][0]["quote"] = source
-    if accepted:
-        assert validate(response, e)
-    else:
-        with pytest.raises(CitationError): validate(response, e)
+    client = FakeClient(settings, intent(), response, {"supported": [0] if accepted else []})
+    result = await LegalAssistant(FakeSearch([e]), client).answer("Какое правило?")
+    assert result.status == ("answer" if accepted else "insufficient")
+    assert len(client.requests) == 3
+
+
+@pytest.mark.parametrize("kind", ["поставки", "аренды", "оказания услуг"])
+async def test_contract_type_words_do_not_preempt_semantic_verifier(settings, evidence, kind):
+    source = "4.2. Оплата производится в течение 30 календарных дней после подписания акта."
+    e = evidence.model_copy(update={"text": source, "document_title": f"Договор {kind} № Т-1/2026",
+        "coordinates": Coordinates(source_path="contract.txt", char_start=0, char_end=len(source))})
+    response = draft(e, text=f"По договору {kind} № Т-1/2026 оплата производится в течение 30 календарных дней после подписания акта.")
+    response["claims"][0]["supports"][0]["quote"] = source
+    client = FakeClient(settings, intent(), response, {"supported": [0]})
+    result = await LegalAssistant(FakeSearch([e]), client).answer("Оплата?")
+    assert result.status == "answer" and len(client.requests) == 3
+    assert client.requests[2][1]["claims"][0]["text"] == response["claims"][0]["text"]
+
+
+async def test_false_premise_number_can_be_explicitly_corrected(settings, evidence):
+    response = draft(evidence, text="Срок составляет 30 календарных дней после подписания УПД; утверждение о 90 днях неверно.")
+    client = FakeClient(settings, intent(), response, {"supported": [0]})
+    result = await LegalAssistant(FakeSearch([evidence]), client).answer("Правда, что срок оплаты 90 дней?")
+    assert result.status == "answer" and "30" in result.text and "90" in result.text
+    assert len(client.requests) == 3
