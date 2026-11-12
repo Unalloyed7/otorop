@@ -11,7 +11,12 @@ from conftest import FakeSearch
 from diagnostics import active_run, append_report, capture_run
 from llm_client import LLMClient
 from solution import run_submission
-from tools.evaluate_answers import build_case_reviews, compare_records, load_case_suite
+from tools.evaluate_answers import (
+    build_case_reviews,
+    case_questions_path,
+    compare_records,
+    load_case_suite,
+)
 from tools.package_submission import package
 
 
@@ -109,6 +114,13 @@ def test_case_suite_resolves_official_and_local_questions(tmp_path):
     assert [row[0] for row in rows] == ["001", "challenge-19"]
     assert [row[1] for row in rows] == ["Официальный вопрос", "Локальный вопрос"]
     assert len(cases) == 2 and documents == {"contract": "Договор № 1"}
+
+
+def test_case_questions_path_accepts_public_demo_file(tmp_path):
+    demo_questions = tmp_path / "demo_questions.csv"
+    demo_questions.write_text("id,question\n001,Вопрос\n", encoding="utf-8")
+
+    assert case_questions_path(tmp_path) == demo_questions
 
 
 def test_checked_in_case_annotations_load_as_one_suite(tmp_path):

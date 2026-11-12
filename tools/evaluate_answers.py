@@ -29,6 +29,16 @@ def read_records(path):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").split("\n") if line]
 
 
+def case_questions_path(data_dir: Path) -> Path:
+    for filename in ("questions.csv", "demo_questions.csv"):
+        candidate = data_dir / filename
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(
+        f"В {data_dir} нужен questions.csv или demo_questions.csv из материалов организаторов"
+    )
+
+
 def load_case_suite(cases_path: Path, questions_path: Path):
     payload = json.loads(cases_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or not isinstance(payload.get("cases"), list):
@@ -195,10 +205,11 @@ def compare_records(baseline, checked):
 
 async def evaluate(data_dir: Path, output: Path, mode: str, cases_path: Path | None = None):
     settings = Settings.from_env()  # Никаких ключей/адресов в manifest и stdout.
-    case_suite = load_case_suite(cases_path, data_dir / "questions.csv") if cases_path else None
+    questions_path = case_questions_path(data_dir) if cases_path else data_dir / "questions.csv"
+    case_suite = load_case_suite(cases_path, questions_path) if cases_path else None
     output.mkdir(parents=True, exist_ok=False)
     variants = [False, True] if mode == "both" else [mode == "1"]
-    manifest = {"model": settings.model, "embedding_model": settings.embedding_model, "reranker_model": settings.reranker_model, "temperature": settings.temperature, "max_tokens": settings.max_tokens, "search_retries": settings.search_retries, "questions_sha256": hashlib.sha256((data_dir / "questions.csv").read_bytes()).hexdigest(), "evaluation": "independent runs; quality requires manual review; not an official score", "case_suite": {"count": len(case_suite[0]), "sha256": hashlib.sha256(cases_path.read_bytes()).hexdigest(), "automatic_semantic_scoring": False} if case_suite else None, "variants": {}}
+    manifest = {"model": settings.model, "embedding_model": settings.embedding_model, "reranker_model": settings.reranker_model, "temperature": settings.temperature, "max_tokens": settings.max_tokens, "search_retries": settings.search_retries, "questions_sha256": hashlib.sha256(questions_path.read_bytes()).hexdigest(), "evaluation": "independent runs; quality requires manual review; not an official score", "case_suite": {"count": len(case_suite[0]), "sha256": hashlib.sha256(cases_path.read_bytes()).hexdigest(), "automatic_semantic_scoring": False} if case_suite else None, "variants": {}}
     records = {}
     for verify in variants:
         label = "verify-1" if verify else "verify-0"
