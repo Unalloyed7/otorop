@@ -34,6 +34,15 @@ async def create_search(*, data_dir: Path, client: LLMClient) -> Search:
 `bundle_result` адаптирует результат к прежнему `SearchResult`, схема не
 меняется. Backend только с `search` продолжает работать по прежнему интерфейсу.
 
+При включённом `KNOWLEDGE_LLM_EXTRACTION` один внешний поиск выполняет одну
+ограниченную порцию извлечения связей. Все части `search_bundle` делят этот
+бюджет. Состояние сохраняется в SQLite, следующий поиск продолжает очередь.
+Отчёт `pipeline.llm_relations` содержит `total_chunks`, `completed_chunks`,
+`remaining_chunks` и `coverage_complete`; `partial` не считается завершением
+корпуса. Эти данные доступны в результате bundle и трассировке; публичные
+схемы Evidence/Answer не меняются. Завершение извлечения не доказывает
+юридическую полноту графа. Пример настроек — в `.env.example`.
+
 ### Evidence
 
 | Поле | Значение |

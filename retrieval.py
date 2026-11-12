@@ -16,6 +16,8 @@ import tempfile
 import time
 import tracemalloc
 from collections import Counter, defaultdict
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -28,11 +30,12 @@ from knowledge_pipeline import (
     KnowledgePipeline,
     RESOLUTION_VERSION,
     attach_relations,
+    reference_document_scope,
     resolve_candidates,
 )
 from llm_client import LLMClient, ModelAPIError, ModelProtocolError, Settings
 
-RETRIEVAL_VERSION = "retrieval-v7"
+RETRIEVAL_VERSION = "retrieval-v8"
 EMBEDDING_CACHE_VERSION = 2
 EMBEDDING_RETRY_BASE_SECONDS = 30.0
 EMBEDDING_RETRY_MAX_SECONDS = 300.0
@@ -453,14 +456,17 @@ class SearchIndex:
                     for candidate in chunks_by_document[target_document["document_id"]]
                     if section_key(candidate.get("section_reference")) == target_reference
                 ]
-                if not targets:
+                targets = provision_targets(targets)
+                if len(targets) != 1:
                     gap = {
-                        "kind": "referenced_provision_not_found",
+                        "kind": "referenced_provision_ambiguous" if targets else "referenced_provision_not_found",
                         "source_chunk_id": instruction["chunk_id"],
                         "target_reference": target_reference,
                         "contract_number": contract_number,
                         "source_text": instruction["text"],
-                        "message": f"В базе не найден изменяемый пункт {target_reference} договора.",
+                        "candidate_chunk_ids": [target["chunk_id"] for target in targets],
+                        "message": (f"Изменяемый пункт {target_reference} неоднозначен."
+                                    if targets else f"В базе не найден изменяемый пункт {target_reference} договора."),
                     }
                     self.provision_gaps.append(gap)
                     instruction["provision_gaps"].append(gap)
@@ -606,6 +612,9 @@ class SearchIndex:
                 if explicit_reference:
                     linked_documents = set(document.get("linked_document_ids", []))
                     linked_documents.add(document["document_id"])
+                    linked_documents = reference_document_scope(
+                        self, source["text"], str(explicit_reference), linked_documents,
+                    )
                     targets = [
                         candidate
                         for linked_id in linked_documents
@@ -623,6 +632,9 @@ class SearchIndex:
                             target_reference=str(explicit_reference),
                         )
                         continue
+                    # An unresolved explicit reference is not evidence that
+                    # a nearby provision is the exception's intended target.
+                    continue
                 current_section = section_key(source.get("section_reference"))
                 if is_exception and current_section and "." in current_section:
                     parent = current_section.rsplit(".", 1)[0]
@@ -673,6 +685,9 @@ class SearchIndex:
                                 re.IGNORECASE,
                             )
                         )
+                target_document_ids = reference_document_scope(
+                    self, source["text"], str(reference), target_document_ids,
+                )
                 referenced_targets = [
                     candidate
                     for linked_id in target_document_ids
@@ -1208,6 +1223,7 @@ class SchemaSearchBackend:
         self.knowledge_pipeline = knowledge_pipeline
         self.llm_relations = llm_relations
         self._llm_relations_loaded = False
+        self._knowledge_request_active = ContextVar("knowledge_request_active", default=False)
         self._relation_lock = asyncio.Lock()
         self._embedding_lock = asyncio.Lock()
         self._document_vectors: dict[str, list[float]] | None = None
@@ -1218,17 +1234,23 @@ class SchemaSearchBackend:
         self._embedding_retry_after = 0.0
         self._embedding_cache_file: Path | None = None
 
-    async def _ensure_llm_relations(self) -> None:
-        if self._llm_relations_loaded or not self.llm_relations:
+    async def _ensure_llm_relations(self, *, advance: bool = False) -> None:
+        if not self.llm_relations or (self._llm_relations_loaded and not advance):
             return
         async with self._relation_lock:
-            if self._llm_relations_loaded:
+            previous_report = self.index.pipeline_diagnostics.get("llm_relations", {})
+            if previous_report.get("coverage_complete") or (self._llm_relations_loaded and not advance):
                 return
             pipeline = self.knowledge_pipeline
             if pipeline is None or self.client is None:
                 self.diagnostics.append(
                     "LLM-извлечение связей не выполнено: клиент или хранилище кэша недоступны."
                 )
+                self.index.pipeline_diagnostics["llm_relations"] = {
+                    "status": "unavailable", "coverage_complete": False,
+                    "total_chunks": len(self.index.chunks),
+                    "remaining_chunks": len(self.index.chunks),
+                }
                 self._llm_relations_loaded = True
                 return
             try:
@@ -1243,6 +1265,7 @@ class SchemaSearchBackend:
                     ),
                     model=model,
                     max_chunks=limit,
+                    endpoint=str(getattr(self.client.settings, "base_url", "")),
                 )
                 graph_version = f"{GRAPH_VERSION}:llm"
                 cached_graph = pipeline.get_graph(
@@ -1251,11 +1274,8 @@ class SchemaSearchBackend:
                 )
                 if cached_graph is not None:
                     self.index._restore_graph(cached_graph)
-                    report = {
-                        "status": "cached",
-                        "model": model,
-                        "prompt_version": LLM_PROMPT_VERSION,
-                    }
+                    report = dict(cached_graph["llm_report"])
+                    report.update(status="cached", attempted_chunks=0)
                     self.index.pipeline_diagnostics["llm_relations"] = report
                     self.diagnostics.append(
                         f"LLM-граф восстановлен из кэша для модели {model}."
@@ -1269,16 +1289,17 @@ class SchemaSearchBackend:
                 )
                 relations, gaps = resolve_candidates(self.index, candidates)
                 attach_relations(self.index, relations, gaps)
+                self.index.pipeline_diagnostics["llm_relations"] = report
                 if report["status"] == "complete":
                     pipeline.save_graph(
                         graph_fingerprint,
                         self.index,
                         stage_version=graph_version,
                     )
-                self.index.pipeline_diagnostics["llm_relations"] = report
                 self.diagnostics.append(
                     "LLM-извлечение связей: "
                     f"{report['status']}, кандидатов {report['relations']}, "
+                    f"осталось фрагментов {report['remaining_chunks']}, "
                     f"ошибок {len(report['failures'])}."
                 )
             except Exception as exc:
@@ -1288,6 +1309,7 @@ class SchemaSearchBackend:
                 )
                 self.index.pipeline_diagnostics["llm_relations"] = {
                     "status": "failed",
+                    "coverage_complete": False,
                     "error": message,
                 }
                 self.diagnostics.append(message)
@@ -1296,8 +1318,21 @@ class SchemaSearchBackend:
                 self._llm_relations_loaded = True
 
     async def prepare_knowledge_graph(self) -> None:
-        """Run the explicitly enabled, bounded LLM enrichment stage."""
-        await self._ensure_llm_relations()
+        """Advance one bounded batch, continuing persisted unfinished work."""
+        await self._ensure_llm_relations(advance=True)
+
+    @asynccontextmanager
+    async def _knowledge_request(self):
+        """At most one enrichment batch per outer search, including its parts."""
+        if self._knowledge_request_active.get():
+            yield
+            return
+        token = self._knowledge_request_active.set(True)
+        try:
+            await self._ensure_llm_relations(advance=True)
+            yield
+        finally:
+            self._knowledge_request_active.reset(token)
 
     def _cache_path(self) -> Path:
         if self._embedding_cache_file is None:
@@ -1687,6 +1722,25 @@ class SchemaSearchBackend:
         existing_chunk_ids: Sequence[str] = (),
         mode: str | None = None,
     ) -> dict[str, Any]:
+        async with self._knowledge_request():
+            return await self._search_bundle(
+                parts, filters, top_k=top_k, max_context_chars=max_context_chars,
+                max_context_chunks=max_context_chunks, query_context=query_context,
+                existing_chunk_ids=existing_chunk_ids, mode=mode,
+            )
+
+    async def _search_bundle(
+        self,
+        parts: Sequence[str],
+        filters: Any,
+        *,
+        top_k: int | None = None,
+        max_context_chars: int = 12000,
+        max_context_chunks: int | None = None,
+        query_context: str | None = None,
+        existing_chunk_ids: Sequence[str] = (),
+        mode: str | None = None,
+    ) -> dict[str, Any]:
         """Search question parts and return dependency-closed, provenance-safe groups."""
         normalized_parts = [part.strip() for part in parts if isinstance(part, str) and part.strip()]
         if not normalized_parts:
@@ -1972,6 +2026,10 @@ class SchemaSearchBackend:
         }
 
     async def search(self, query: str, filters: Any) -> Any:
+        async with self._knowledge_request():
+            return await self._search(query, filters)
+
+    async def _search(self, query: str, filters: Any) -> Any:
         configured_embeddings = (
             self.client is not None and bool(self.client.settings.embedding_model)
         )
