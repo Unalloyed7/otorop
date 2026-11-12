@@ -51,7 +51,10 @@ def test_cli_with_real_http_csv_and_archive(tmp_path, mode):
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    env = {k: v for k, v in os.environ.items() if k not in {"SEARCH_FACTORY", "RERANKER_MODEL", "OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL", "GEN_MODEL", "EMB_MODEL"}}
+    env = {k: v for k, v in os.environ.items() if k not in {"SEARCH_FACTORY", "RERANKER_MODEL", "OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL", "GEN_MODEL", "EMB_MODEL", "OTOROP_EMBEDDING_CACHE_DIR", "OTOROP_KNOWLEDGE_CACHE_DIR", "KNOWLEDGE_LLM_EXTRACTION"}}
+    blocked_cache = tmp_path / "readonly-home-cache"
+    blocked_cache.mkdir(mode=0o555)
+    env["XDG_CACHE_HOME"] = str(blocked_cache)
     env.update(DATA_DIR=str(data), LLM_BASE_URL=f"http://127.0.0.1:{server.server_port}/v1", LLM_API_KEY="test-only-key", LLM_MODEL="test-model", MAX_WORKERS="1", VERIFY_ANSWER="1")
     try:
         result = subprocess.run([sys.executable, str(transferred / "solution.py")], cwd=tmp_path, env=env, capture_output=True, text=True, timeout=20)
@@ -59,7 +62,9 @@ def test_cli_with_real_http_csv_and_archive(tmp_path, mode):
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+        blocked_cache.chmod(0o755)
     assert result.returncode == 0, result.stderr
+    assert not list(blocked_cache.iterdir())
     assert "answer=1" in result.stdout
     validate_submission(tmp_path / "submission.csv", ["001"])
     with (tmp_path / "submission.csv").open(encoding="utf-8", newline="") as f:
