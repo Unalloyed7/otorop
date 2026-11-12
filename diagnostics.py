@@ -19,7 +19,7 @@ def active_run() -> dict | None:
 def runtime_configuration(client=None):
     root = Path(__file__).resolve().parent
     digest = hashlib.sha256()
-    for name in ("schemas.py", "assistant.py", "llm_client.py", "retrieval.py", "documents.py", "temporal.py", "date_context.py", "verification.py", "execution.py", "solution.py"):
+    for name in ("schemas.py", "assistant.py", "llm_client.py", "retrieval.py", "documents.py", "structural_chunking.py", "knowledge_pipeline.py", "search_adapter.py", "temporal.py", "date_context.py", "verification.py", "execution.py", "solution.py"):
         path = root / name
         if path.is_file():
             digest.update(name.encode() + b"\0" + path.read_bytes())
