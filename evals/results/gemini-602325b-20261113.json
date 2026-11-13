@@ -1,0 +1,83 @@
+{
+  "revision": "602325b9169aa4562e1a3e13a31916f96f00fb25",
+  "model": "gemini-3.1-flash-lite",
+  "started_at_moscow": "2026-11-12T21:53:32.339630+03:00",
+  "finished_at_moscow": "2026-11-13T02:02:00.893569+03:00",
+  "knowledge_base_sha256": "cea8ef2c8f6c8b9f498efacf705b97bf3da53cc78f366f9b1fef7a6de66327e0",
+  "cases_sha256": "03d00928b06f083da5e6ba5e017304a8aed00e33f23d2529b3ed6768487c5f0a",
+  "question_count": 72,
+  "first_pass": {
+    "processed": 72,
+    "statuses": {
+      "clarify": 15,
+      "answer": 43,
+      "partial": 5,
+      "insufficient": 6,
+      "error": 3
+    },
+    "api_calls": 207,
+    "http_statuses": {
+      "200": 178,
+      "503": 6,
+      "ReadTimeout": 3,
+      "ConnectTimeout": 1,
+      "429": 17,
+      "ConnectError": 1,
+      "cancelled": 1
+    },
+    "error_ids": [
+      "20",
+      "65",
+      "71"
+    ]
+  },
+  "technical_retry": {
+    "processed": 3,
+    "statuses": {
+      "answer": 1,
+      "error": 2
+    },
+    "api_calls": 11,
+    "http_statuses": {
+      "200": 5,
+      "429": 6
+    },
+    "error_ids": [
+      "65",
+      "71"
+    ]
+  },
+  "effective": {
+    "statuses": {
+      "clarify": 15,
+      "answer": 44,
+      "partial": 5,
+      "insufficient": 6,
+      "error": 2
+    },
+    "technical_error_ids": [
+      "65",
+      "71"
+    ],
+    "citation_count": 84,
+    "invalid_citation_count": 0,
+    "clarification_before_search_count": 15,
+    "case_12_status": "answer",
+    "case_12_missing_info": []
+  },
+  "settings": {
+    "verification_enabled": true,
+    "search": "BM25 and provision graph",
+    "embedding_model": null,
+    "reranker_model": null,
+    "workers": 1,
+    "first_pass_http_requests_per_minute": 6,
+    "retry_http_requests_per_minute": 2,
+    "question_timeout_seconds": 300,
+    "max_output_tokens": 4096
+  },
+  "selection_rule": "Keep the first response; replace only a technical error with its single retry. Both attempts remain in the local report.",
+  "timing_note": "The first pass resumed from saved records after a stalled session. Reported elapsed_seconds covers only its final phase.",
+  "evaluation": "Live API run. Status counts and citation integrity are not independent legal answer accuracy.",
+  "local_report_directory": "reports/gemini-all-72-602325b-20261112"
+}
