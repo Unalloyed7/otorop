@@ -1,6 +1,7 @@
 """FastAPI-оболочка общего движка. Запуск: uvicorn web_app:app --port 8000."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -22,6 +23,7 @@ from search_adapter import build_search
 
 log = logging.getLogger(__name__)
 WEB_DIR = Path(__file__).resolve().parent / "web"
+ANNOTATION_BATCH = Path(__file__).resolve().parent / "evals" / "annotation-batch.json"
 MAX_BODY_BYTES = 300_000
 
 
@@ -158,6 +160,23 @@ def create_app(*, engine: Any = None, backend: Any = None, state_path=None) -> F
     @app.get("/healthz", include_in_schema=False)
     async def health():
         return {"status": "ok"}
+
+    @app.get("/annotation", include_in_schema=False)
+    async def annotation_page():
+        response = FileResponse(WEB_DIR / "annotation.html")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/api/annotation-batch")
+    async def annotation_batch():
+        try:
+            return json.loads(ANNOTATION_BATCH.read_text(encoding="utf-8"))
+        except OSError:
+            log.exception("annotation: не удалось прочитать пакет разметки")
+            raise HTTPException(503, "Пакет разметки недоступен.") from None
+        except json.JSONDecodeError:
+            log.exception("annotation: некорректный JSON пакета разметки")
+            raise HTTPException(500, "В пакете разметки ошибка формата.") from None
 
     @app.get("/api/status")
     async def status():

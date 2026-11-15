@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#172c3d">
+  <title>Совместная разметка · ПСБ</title>
+  <link rel="stylesheet" href="/assets/annotation.css">
+  <script src="/assets/annotation.js" defer></script>
+</head>
+<body class="annotation-page">
+  <header class="annotation-header">
+    <a class="back-link" href="/">← К ассистенту</a>
+    <div>
+      <p class="eyebrow">ЛОКАЛЬНАЯ ПРОВЕРКА ОТКРЫТОЙ БАЗЫ</p>
+      <h1>Совместная разметка кейсов</h1>
+    </div>
+    <button class="export-button" id="export-review" type="button" disabled>Скачать решения</button>
+  </header>
+  <p class="draft-notice">Это черновая партия. Решения сохраняются в браузере; основной набор не меняется автоматически.</p>
+  <main class="annotation-layout">
+    <aside class="case-navigation">
+      <div class="progress-summary" id="progress-summary" role="status">Загружаем пакет…</div>
+      <label class="case-filter">
+        <span class="sr-only">Поиск по сценариям</span>
+        <input id="case-filter" type="search" placeholder="Найти кейс по ID или теме">
+      </label>
+      <nav id="case-list" aria-label="Сценарии для проверки"></nav>
+    </aside>
+    <section class="review-panel" aria-live="polite">
+      <div id="loading" class="loading-state">Загружаем сценарии и выдержки из источников…</div>
+      <div id="load-error" class="error-state" hidden></div>
+      <article id="case-content" hidden>
+        <p class="case-kicker" id="case-kicker"></p>
+        <h2 id="case-title"></h2>
+        <p class="corpus-version" id="corpus-version"></p>
+        <section class="question-card">
+          <h3>Сценарий</h3>
+          <p id="case-question"></p>
+        </section>
+        <section class="expectations">
+          <div>
+            <h3>Ожидаемый тип ответа</h3>
+            <p id="case-disposition"></p>
+          </div>
+          <div>
+            <h3>Факты, которые должны прозвучать</h3>
+            <ul id="required-claims"></ul>
+          </div>
+          <div id="limitation-block">
+            <h3>Ограничение</h3>
+            <p id="required-limitation"></p>
+          </div>
+          <div>
+            <h3>Чего нельзя утверждать</h3>
+            <ul id="must-not-claim"></ul>
+          </div>
+        </section>
+        <section>
+          <h3>Первоисточник</h3>
+          <div id="source-list" class="source-list"></div>
+        </section>
+        <label class="review-note-label" for="review-note">Твоя поправка или комментарий</label>
+        <textarea id="review-note" rows="3" maxlength="2000" placeholder="Например: здесь нужно добавить условие…"></textarea>
+        <div class="decision-row" role="group" aria-label="Решение по сценарию">
+          <button type="button" data-decision="confirmed">Подтвердить</button>
+          <button type="button" data-decision="needs_revision">Нужна правка</button>
+          <button type="button" data-decision="unclear">Неясно</button>
+        </div>
+        <p class="save-status" id="save-status" role="status">Решения сохраняются только в этом браузере.</p>
+        <div class="case-controls">
+          <button type="button" id="previous-case">← Предыдущий</button>
+          <button type="button" id="next-case">Следующий →</button>
+        </div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

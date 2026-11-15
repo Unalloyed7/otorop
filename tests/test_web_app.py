@@ -125,13 +125,26 @@ def test_lifespan_closes_owned_client(backend, settings, monkeypatch):
 
 def test_static_and_security_headers(backend):
     with TestClient(create_app(engine=RecordingEngine(), backend=backend)) as client:
-        for path in ["/", "/assets/styles.css", "/assets/app.js", "/assets/favicon.svg"]:
+        for path in ["/", "/annotation", "/assets/styles.css", "/assets/app.js", "/assets/favicon.svg",
+                     "/assets/annotation.css", "/assets/annotation.js"]:
             response = client.get(path)
             assert response.status_code == 200
             assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
         assert "Юридический ассистент" in client.get("/").text
+        assert "Совместная разметка кейсов" in client.get("/annotation").text
         assert client.get("/api/status").headers["cache-control"] == "no-store"
         assert client.get("/api/openapi.json").status_code == 200
+
+
+def test_annotation_batch_is_a_reviewable_draft(backend):
+    with TestClient(create_app(engine=RecordingEngine(), backend=backend)) as client:
+        response = client.get("/api/annotation-batch")
+        assert response.status_code == 200
+        batch = response.json()
+        assert batch["batch_id"] == "answer-review-03"
+        assert len(batch["cases"]) == 55
+        assert len({case["id"] for case in batch["cases"]}) == 55
+        assert all(case["sources"] and case["required_claims"] for case in batch["cases"])
 
 
 async def test_queue_is_bounded(backend):

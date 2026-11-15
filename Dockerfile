@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements-web.txt \
     && useradd --uid 10001 --create-home appuser \
     && mkdir /state && chown 10001:10001 /state && chmod 700 /state
 COPY *.py ./
+COPY evals/annotation-batch.json ./evals/annotation-batch.json
 COPY web ./web
 USER appuser
 EXPOSE 8000

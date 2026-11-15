@@ -14,5 +14,7 @@ dist
 reports
 .state
 evals
+!evals/
+!evals/annotation-batch.json
 submission.csv
 *.egg-info
