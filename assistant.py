@@ -148,7 +148,8 @@ DRAFT_PROMPT += _RENEWAL_NOTE
 VERIFY_PROMPT += _RENEWAL_NOTE
 DRAFT_PROMPT += """
 Для каждого claim заполни subject, rule (duty/permission/restriction/information),
-value: сумму или срок с единицей, calendar/working и counted_from — событие отсчёта.
+value как объект RuleValue, не null; сумму или срок заполни с единицей, calendar/working
+и counted_from — событием отсчёта. Если числового значения нет, используй пустой объект.
 conditions содержат текст, key/expected для явно известных обстоятельств и supports.
 limitations — ссылки на исключения, другие редакции, допсоглашения и дополняющий порядок.
 Не подменяй период действия нормы интервалом пользовательской даты. При изменении
