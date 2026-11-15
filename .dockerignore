@@ -11,5 +11,8 @@ tools
 docs
 examples
 dist
+reports
+.state
+evals
 submission.csv
 *.egg-info

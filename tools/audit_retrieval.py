@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+import copy
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -12,7 +13,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from retrieval import create_search
-from llm_client import compact_evidence
+from llm_client import compact_evidence, remap_references
 from schemas import SearchFilters
 from temporal import temporal_issue
 
@@ -50,6 +51,7 @@ async def audit(data_dir, annotations, *, top_k=12, bundle=False):
                 assembled = await backend.search_bundle(
                     [query], filters, top_k=top_k,
                     max_context_chars=60000, max_context_chunks=top_k * 2,
+                    recovery_rounds=0, recovery_query_budget=0,
                 )
                 result = backend.bundle_result(assembled)
             else:
@@ -82,9 +84,10 @@ async def audit(data_dir, annotations, *, top_k=12, bundle=False):
             original = {"evidence": [e.model_dump(mode="json") for e in eligible]}
             compact, docs, chunks = compact_evidence(original)
             for passage, evidence in zip(compact["evidence"], original["evidence"]):
-                restored = {**compact["documents"][passage["document_id"]], **passage}
-                assert docs[restored["document_id"]] == evidence["document_id"]
-                assert chunks[restored["chunk_id"]] == evidence["chunk_id"]
+                restored = copy.deepcopy({**compact["documents"][passage["document_id"]], **passage})
+                remap_references(restored, docs, chunks)
+                assert restored["document_id"] == evidence["document_id"]
+                assert restored["chunk_id"] == evidence["chunk_id"]
                 for key in ("text", "section", "document_title", "applicability", "counterparty", "contract_number"):
                     assert restored[key] == evidence[key], key
                 assert restored["metadata"] == {k: v for k, v in evidence["metadata"].items() if k not in {"score", "retrieval_reason"}}

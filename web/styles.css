@@ -1336,3 +1336,372 @@ button:focus:not(:focus-visible) {
     scroll-behavior:auto!important
   }
 }
+/* Проверяемые утверждения, сценарии и локальная аналитика. */
+.scenario-settings {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border: 1px solid #dce3e9;
+  border-radius: 12px;
+  background: #fff;
+  font-size: 13px;
+  max-height: 32vh;
+  overflow: auto
+}
+
+.scenario-settings summary {
+  cursor: pointer;
+  font-weight: 650;
+  color: #233e52
+}
+
+.scenario-settings p {
+  color: #637484;
+  line-height: 1.5
+}
+
+.scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px
+}
+
+.scenario-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: #4d6374
+}
+
+.scenario-grid input,
+.scenario-grid select,
+.workbench-dialog input,
+.workbench-dialog select,
+.workbench-dialog textarea {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  border: 1px solid #cbd7df;
+  border-radius: 7px;
+  padding: 9px;
+  font: inherit;
+  background: white;
+  color: #263e50
+}
+
+.statement-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px
+}
+
+.statement-card {
+  border: 1px solid #d5e0e7;
+  border-left: 4px solid #7791a3;
+  border-radius: 10px;
+  background: #fff;
+  overflow: hidden
+}
+
+.statement-card.confirmed {
+  border-left-color: #318369
+}
+
+.statement-card.conditional {
+  border-left-color: #d39732
+}
+
+.statement-card.contradiction {
+  border-left-color: #bb5d50
+}
+
+.statement-card.insufficient {
+  border-left-color: #83909b
+}
+
+.statement-card summary {
+  padding: 13px;
+  cursor: pointer;
+  display: grid;
+  gap: 7px;
+  line-height: 1.5
+}
+
+.statement-card summary strong {
+  font-size: 14px;
+  font-weight: 550;
+  overflow-wrap: anywhere
+}
+
+.check-badge {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: #526f80
+}
+
+.statement-content {
+  padding: 0 14px 15px;
+  font-size: 13px;
+  line-height: 1.6
+}
+
+.statement-content h4 {
+  margin: 14px 0 6px
+}
+
+.statement-content p {
+  margin: 6px 0
+}
+
+.unpublished-note {
+  color: #9b4f42
+}
+
+.rule-details {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(0, 3fr);
+  gap: 5px 14px;
+  margin: 12px 0
+}
+
+.rule-details dt {
+  color: #637c8c
+}
+
+.rule-details dd {
+  margin: 0;
+  overflow-wrap: anywhere
+}
+
+.proof-link {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid #dbe4eb;
+  border-radius: 7px;
+  background: #f8fafc;
+  padding: 10px;
+  margin: 7px 0;
+  color: #274258;
+  cursor: pointer;
+  font: inherit;
+  overflow-wrap: anywhere
+}
+
+.proof-link span,
+.check-reason {
+  font-size: 12px;
+  color: #6d8290
+}
+
+.proof-link q {
+  font-size: 12px;
+  white-space: pre-wrap
+}
+
+.source-diff {
+  font-size: 12px;
+  color: #617d8b
+}
+
+.job-reference {
+  font-size: 11px;
+  color: #8294a0
+}
+
+.loading-message {
+  flex-wrap: wrap
+}
+
+.job-sources {
+  flex-basis: 100%;
+  display: grid;
+  gap: 3px;
+  font-size: 12px;
+  max-height: 180px;
+  overflow: auto
+}
+
+.job-sources .text-button {
+  text-align: left
+}
+
+.job-sources p {
+  color: #72848e
+}
+
+.job-progress {
+  max-width: 70%;
+  overflow-wrap: anywhere
+}
+
+.workbench-dialog {
+  width: min(1120px, calc(100vw - 32px));
+  max-width: calc(100vw - 32px);
+  max-height: 90vh;
+  box-sizing: border-box;
+  border: 1px solid #d6e0e7;
+  border-radius: 16px;
+  padding: 22px;
+  color: #243d50;
+  box-shadow: 0 20px 90px #162d4140;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  overflow: auto
+}
+
+.workbench-dialog::backdrop {
+  background: #0b213c8a
+}
+
+.workbench-dialog>header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px
+}
+
+.workbench-dialog h2 {
+  font-size: 22px
+}
+
+.workbench-dialog h3 {
+  font-size: 16px;
+  overflow-wrap: anywhere
+}
+
+.workbench-dialog pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  background: #f3f6f9;
+  border-radius: 9px;
+  padding: 14px;
+  max-height: 40vh;
+  overflow: auto
+}
+
+.comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin: 16px 0
+}
+
+.comparison-grid>section {
+  min-width: 0;
+  border: 1px solid #dce5eb;
+  border-radius: 10px;
+  padding: 14px
+}
+
+.comparison-grid select {
+  width: 100%
+}
+
+.workbench-dialog .text-button {
+  margin: 7px 12px 7px 0
+}
+
+.run-case,
+.official-scores {
+  border: 1px solid #dce5eb;
+  border-radius: 10px;
+  padding: 12px;
+  margin: 12px 0;
+  overflow-wrap: anywhere
+}
+
+.run-case summary,
+.official-scores summary {
+  font-weight: 650;
+  cursor: pointer
+}
+
+.run-case textarea {
+  display: block;
+  width: 100%;
+  min-height: 65px;
+  margin-top: 10px
+}
+
+.run-case select {
+  margin-right: 10px
+}
+
+.official-scores input {
+  margin: 8px 8px 0 0
+}
+
+@media(max-width:650px) {
+
+  .scenario-grid,
+  .comparison-grid {
+    grid-template-columns: minmax(0, 1fr)
+  }
+
+  .rule-details {
+    grid-template-columns: minmax(0, 1fr)
+  }
+
+  .rule-details dd {
+    margin-bottom: 8px
+  }
+
+  .workbench-dialog {
+    padding: 14px
+  }
+
+  .workbench-dialog h2 {
+    font-size: 18px
+  }
+
+  .scenario-settings {
+    max-height: 25vh
+  }
+
+  .job-reference {
+    display: none
+  }
+}
+
+.statement-card summary::after {
+  content: "Показать основания и условия ▾";
+  font-size: 11px;
+  color: #718794
+}
+
+.statement-card[open] summary::after {
+  content: "Свернуть ▴"
+}
+
+.source-changes {
+  font-size: 12px;
+  color: #617d8b;
+  padding-left: 18px
+}
+
+.workbench-dialog>header {
+  position: sticky;
+  top: -22px;
+  background: #fff;
+  z-index: 2;
+  padding: 8px 0;
+  border-bottom: 1px solid #e4eaf0
+}
+
+.workbench-dialog:has(.run-case)>header {
+  margin-bottom: 12px
+}
+
+@media(max-width:650px) {
+  .workbench-dialog>header {
+    top: -14px
+  }
+}

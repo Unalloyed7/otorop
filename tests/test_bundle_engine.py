@@ -39,8 +39,11 @@ async def test_engine_uses_bundle_and_sends_complete_amendment_to_generator(corp
     trace = {"stages": []}
     result = await LegalAssistant(backend, client).answer("Куда доставлять и когда меняется адрес?", trace=trace)
     assert result.status == "answer"
-    backend.search_bundle.assert_awaited_once()
-    assert backend.search_bundle.call_args.args[0] == plan.parts
+    assert backend.search_bundle.await_count == 2
+    assert backend.search_bundle.call_args_list[0].args[0] == plan.parts
+    assert backend.search_bundle.call_args_list[1].args[1].purpose == "limitations"
+    assert all(call.kwargs["recovery_query_budget"] == 0 for call in backend.search_bundle.call_args_list)
+    assert result.verification["search_calls"] <= settings.max_search_calls
     evidence = client.requests[1][1]["evidence"]
     assert any("Старый склад" in e["text"] for e in evidence)
     assert any("Новый склад" in e["text"] for e in evidence)
@@ -49,6 +52,13 @@ async def test_engine_uses_bundle_and_sends_complete_amendment_to_generator(corp
     bundle_trace = next(s for s in trace["stages"] if s["stage"] == "search_bundle")
     assert {r["type"] for r in bundle_trace["relations"]} >= {"changes_provision", "defines_applicability"}
     assert not bundle_trace["truncated"]
+    statement = next(s for s in result.statements if s.published)
+    assert {r.kind for r in statement.relations} >= {"changes_provision", "defines_applicability"}
+    for relation in statement.relations:
+        assert relation.proofs
+        for proof in relation.proofs:
+            document = backend.get_document(proof.document_id)
+            assert document["text"][proof.coordinates.char_start:proof.coordinates.char_end] == proof.quote
 
 
 async def test_bundle_retrieves_all_long_clause_parts_and_parent_intro(tmp_path):
@@ -142,7 +152,7 @@ async def test_unrelated_graph_gap_does_not_downgrade_verified_answer(tmp_path, 
     assert result.status == "answer" and not result.missing_info
     assert "Матрица" not in result.text and "Не хватает" not in result.text
     assert len(client.requests) == 3
-    backend.search_bundle.assert_awaited_once()
+    assert backend.search_bundle.await_count == 2
 
 
 async def test_material_missing_reference_remains_partial(tmp_path, settings):
@@ -190,3 +200,20 @@ async def test_probation_question_with_real_corpus_and_confirmed_verdict(setting
     assert answer.citations[0].quote == quote
     assert next(s for s in trace["stages"] if s["stage"] == "search_bundle")["gaps"]
     backend.search_bundle.assert_awaited_once()
+
+
+async def test_recovery_scores_do_not_evict_original_ground(tmp_path):
+    (tmp_path / "Правило.txt").write_text("1.1. Порядок определяется пунктом 9.9 договора.", encoding="utf-8")
+    (tmp_path / "Другое.txt").write_text("1.1. Другой порядок обработки заявок.", encoding="utf-8")
+    backend = create_search(tmp_path)
+    original = await backend.search("порядок определяется пунктом", SearchFilters())
+    initial = next(e for e in original.evidence if "9.9" in e.text)
+    recovered = next(e for e in original.evidence if "Другой порядок" in e.text)
+    from schemas import SearchResult
+    initial.metadata["score"], recovered.metadata["score"] = 1.0, 100.0
+    backend.search = AsyncMock(side_effect=[SearchResult(evidence=[initial]), SearchResult(evidence=[recovered])])
+    bundle = await backend.search_bundle(["Порядок"], SearchFilters(), top_k=1,
+                                         max_context_chunks=1, recovery_rounds=1, recovery_query_budget=1)
+    assert bundle["recovery"]["queries_used"] == 1
+    assert {e["chunk_id"] for e in bundle["evidence"]} == {initial.chunk_id}
+    assert bundle["truncated"]

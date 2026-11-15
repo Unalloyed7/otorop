@@ -122,11 +122,11 @@ async def test_invalid_sources_and_unsupported_claims_are_blocked(settings, evid
     trace = {}
     result = await LegalAssistant(FakeSearch([evidence]), client).answer("Срок?", trace=trace)
     assert result.status == "insufficient" and not result.citations
+    assert len(client.requests) == 3
     if mutation == "invented_number":
-        assert len(client.requests) == 3
         assert any(s.get("reason") == "semantic verifier" for s in trace["stages"])
     else:
-        assert len(client.requests) == 2
+        assert "repair" in client.requests[2][1]
 
 
 async def test_existing_quote_does_not_prove_conclusion(settings, evidence):
@@ -190,7 +190,8 @@ async def test_verifier_ablation_is_measured_not_assumed(settings, evidence):
     checked = FakeClient(settings, intent(), response, {"supported": []})
     a = await LegalAssistant(FakeSearch([evidence]), base, verify=False).answer("Неустойка?")
     b = await LegalAssistant(FakeSearch([evidence]), checked, verify=True).answer("Неустойка?")
-    assert (a.status, len(base.requests)) == ("answer", 2)
+    assert (a.status, len(base.requests)) == ("partial", 2)
+    assert not a.statements[0].check.semantic_checked
     assert (b.status, len(checked.requests)) == ("insufficient", 3)
 
 
@@ -226,5 +227,8 @@ async def test_irrelevant_missing_historical_law_does_not_spoil_contract_answer(
     client = FakeClient(settings, intent(), draft(evidence), {"supported": [0]})
     result = await LegalAssistant(FakeSearch([evidence, law]), client).answer("Срок оплаты?", as_of="2024-02-01")
     assert result.status == "answer"
-    assert len(client.requests[1][1]["evidence"]) == 1
+    context = client.requests[1][1]["evidence"]
+    unavailable = next(e for e in context if e["document_id"] == "law")
+    assert unavailable["metadata"]["temporal_status"] == "not_applicable"
+    assert all(c.document_id != "law" for c in result.citations)
     assert client.requests[1][1]["unavailable_editions"]

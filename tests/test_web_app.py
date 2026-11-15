@@ -97,6 +97,7 @@ def test_no_api_config_allows_document_browsing(source, monkeypatch):
     for name in ["LLM_BASE_URL", "OPENAI_BASE_URL", "LLM_API_KEY", "OPENAI_API_KEY", "LLM_MODEL", "OPENAI_MODEL", "GEN_MODEL", "SEARCH_FACTORY"]:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("DATA_DIR", str(source))
+    monkeypatch.setenv("WEB_STATE_DIR", str(source / "state"))
     with TestClient(create_app()) as client:
         status = client.get("/api/status").json()
         assert status["documents_available"] and status["document_count"] == 1

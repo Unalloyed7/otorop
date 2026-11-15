@@ -11,8 +11,19 @@ from typing import Protocol, Sequence
 from pydantic import ValidationError
 
 from llm_client import LLMClient, ModelAPIError, ModelProtocolError, Settings
-from schemas import Answer, Citation, Claim, Draft, Evidence, Intent, Message, SearchFilters, SearchResult, Verdict
+from schemas import Answer, Citation, Claim, Draft, Evidence, Intent, Message, ScenarioDates, SearchFilters, SearchResult, SemanticCheck, Verdict
 from temporal import mode_for, period_quoted, temporal_issue
+from date_context import (
+    condition_status,
+    equivalent_coverage,
+    governing_span,
+    infer_signed_date,
+    parse_date_span,
+    range_changes,
+    scenario_for,
+)
+from execution import BudgetExhausted, RunControl, controlled_run, current_control
+from verification import build_statement, linked_citations, statement_key
 
 logger = logging.getLogger(__name__)
 MAX_EVIDENCE_CHARS = 60_000
@@ -50,6 +61,12 @@ historical — нужна норма на прошлую дату; future — н
 snapshot — вопрос о снимке источника, а не периоде нормы; auto — определить по дате.
 Дата выгрузки не равна дате действия. Не называй вопрос текущим, если пользователь
 просит применить норму к прошлому событию. Не подставляй сегодняшнюю норму в прошлое.
+filters.scenario хранит отдельные contract_signed, specification_signed, delivery, event.
+Даты можно передавать строками YYYY-MM-DD, YYYY-MM, YYYY или «август 2024»:
+они нормализуются кодом в полный интервал. Не назначай неизвестный день.
+filters.governing_date — какое из обстоятельств определяет применимую редакцию.
+В scenario.facts запиши только явно сообщённые пользователем условия, например
+standard_form_unchanged=true; прошлые ответы ассистента не доказывают их.
 """
 
 DRAFT_PROMPT = BOUNDARY + """
@@ -129,6 +146,25 @@ metadata.renewal.status=unknown: договор предусматривает �
 """
 DRAFT_PROMPT += _RENEWAL_NOTE
 VERIFY_PROMPT += _RENEWAL_NOTE
+DRAFT_PROMPT += """
+Для каждого claim заполни subject, rule (duty/permission/restriction/information),
+value: сумму или срок с единицей, calendar/working и counted_from — событие отсчёта.
+conditions содержат текст, key/expected для явно известных обстоятельств и supports.
+limitations — ссылки на исключения, другие редакции, допсоглашения и дополняющий порядок.
+Не подменяй период действия нормы интервалом пользовательской даты. При изменении
+правила внутри неизвестного месяца/года попроси уточнение, если нельзя доказать
+одинаковое правило во всём интервале. Все четыре даты имеют разный смысл.
+metadata.temporal_status=not_applicable запрещает использовать фрагмент как
+действующее основание; его можно выбрать в limitations для сравнения редакций.
+metadata.applicability_status=varies означает смену условия внутри периода и требует уточнения.
+"""
+VERIFY_PROMPT += """
+Предпочтительно верни checks по каждому индексу claims: confirmed, conditional,
+contradiction или insufficient, причины и limitations с точными цитатами.
+conditional допускает только явно условный вывод. Неизвестное условие не становится
+выполненным от заявления генератора. Проверь субъект, событие отсчёта, тип дней,
+все даты сценария и ограничения. Противоречие отметь contradiction и укажи источник.
+"""
 
 
 class SearchBackend(Protocol):
@@ -224,7 +260,9 @@ def validate_supports(draft: Draft, evidence: list[Evidence], filters: SearchFil
     if len(by_id) != len(evidence):
         raise CitationError("Неуникальные ID фрагментов")
     citations = []
+    equivalently_covered = equivalent_coverage(evidence, filters)
     for index, claim in enumerate(draft.claims):
+        sources = []
         canonical_supports = []
         if any(type(p) is not int or p < 0 or p >= len(parts) for p in claim.addresses):
             raise CitationError("Несуществующая часть вопроса")
@@ -232,13 +270,17 @@ def validate_supports(draft: Draft, evidence: list[Evidence], filters: SearchFil
             e = by_id.get(support.chunk_id)
             if e is None or e.document_id != support.document_id:
                 raise CitationError("Подмена документа или фрагмента")
+            sources.append(e)
             offset, end = _quote_span(e.text, support.quote)
             quote = e.text[offset:end]
             if _instruction_overlap(e.text, offset, end):
                 raise CitationError("Инструкция для ИИ не является юридическим основанием")
             a = e.applicability
             issue = temporal_issue(e, filters, mode=temporal_mode, reference=reference or datetime.now(timezone(timedelta(hours=3))).date())
-            if issue:
+            span = governing_span(filters, e)
+            if issue and span and span.precision != "day" and not e.applicability.current_only and (not e.applicability.valid_from or e.applicability.valid_from < span.end_exclusive) and (not e.applicability.valid_to or e.applicability.valid_to > span.start):
+                issue = None  # далее проверяем покрытие всего интервала совокупностью цитат
+            if issue and e.chunk_id not in equivalently_covered:
                 raise CitationError(issue)
             canonical_supports.append(support.model_copy(update={"quote": quote}))
             coordinates = e.coordinates.model_copy(update={
@@ -250,6 +292,56 @@ def validate_supports(draft: Draft, evidence: list[Evidence], filters: SearchFil
                 section=_citation_section(e, offset), quote=quote, coordinates=coordinates,
                 edition=a.edition, claim_index=index,
             ))
+        contracts = {e.contract_number for e in sources if e.contract_number}
+        if not contracts:
+            contracts = {filters.contract_number} if filters.contract_number else {
+                e.contract_number for e in evidence if e.contract_number
+            }
+        if claim.subject.contract_number and claim.subject.contract_number not in contracts:
+            raise CitationError("Субъект утверждения не совпадает с договором источника")
+        if claim.subject.counterparty:
+            normalize = lambda value: re.sub(
+                r"[^\w-]", "", re.sub(r"^ООО\s*", "", value, flags=re.I)
+            ).casefold()
+            parties = {normalize(e.counterparty) for e in sources if e.counterparty}
+            if not parties:
+                parties = {
+                    normalize(e.counterparty) for e in evidence
+                    if e.counterparty and (
+                        not filters.contract_number or e.contract_number == filters.contract_number
+                    )
+                }
+                if filters.counterparty:
+                    parties.add(normalize(filters.counterparty))
+            if normalize(claim.subject.counterparty) not in parties:
+                raise CitationError("Субъект утверждения не совпадает с контрагентом источника")
+        if claim.period:
+            for field in ("valid_from", "valid_to"):
+                value = getattr(claim.period, field)
+                if value and value not in {getattr(e.applicability, field) for e in sources}:
+                    raise CitationError("Дата периода утверждения не подтверждена метаданными источника")
+        same_sections = [
+            item for item in evidence
+            if any(
+                item.section == source.section
+                and (item.contract_number or item.document_title.casefold())
+                == (source.contract_number or source.document_title.casefold())
+                for source in sources
+            )
+        ]
+        changes = range_changes(same_sections, filters)
+        if changes:
+            raise CitationError(changes[0])
+        span = governing_span(filters)
+        if span and span.precision != "day" and any(
+            source.chunk_id in equivalently_covered for source in sources
+        ) and not all(
+            source.chunk_id in equivalent_coverage(sources, filters) for source in sources
+        ):
+            raise CitationError("Не процитированы редакции, покрывающие весь указанный период")
+        linked_citations(claim.limitations, evidence)
+        for condition in claim.conditions:
+            linked_citations(condition.supports, evidence)
         if not period_quoted(canonical_supports, evidence, filters, mode=temporal_mode, reference=reference or datetime.now(timezone(timedelta(hours=3))).date()):
             raise CitationError("Не процитировано условие действия нормы во времени")
     return citations
@@ -258,6 +350,12 @@ def validate_supports(draft: Draft, evidence: list[Evidence], filters: SearchFil
 def _record(trace: dict | None, stage: str, **values):
     if trace is not None:
         trace.setdefault("stages", []).append({"stage": stage, **values})
+    control = current_control()
+    if control:
+        event = {"stage": stage}
+        if stage == "search":
+            event["sources"] = [{k: e.get(k) for k in ("document_id", "chunk_id", "document_title", "section")} for e in values.get("evidence", [])]
+        control.emit(event)
 
 
 def _claim_key(claim: Claim) -> str:
@@ -272,6 +370,9 @@ def _response(claims: list[Claim], gaps: list[str], evidence: list[Evidence], fi
         return Answer(status="clarify" if clarify else "insufficient", text=prefix + "; ".join(missing), missing_info=missing)
     draft = Draft(status="partial" if gaps else "answer", claims=claims)
     citations = validate_supports(draft, evidence, filters, intent.parts, temporal_mode=intent.temporal_mode, reference=reference)
+    control = current_control()
+    if control:
+        control.published = {statement_key(c) for c in claims}
     text = "\n".join(f"{c.text} [{i+1}]" for i, c in enumerate(claims))
     if gaps:
         text += "\nПодтверждена только указанная часть. Не хватает: " + "; ".join(gaps) + "."
@@ -284,10 +385,24 @@ class LegalAssistant:
         self.client = client
         self.verify = client.settings.verify if verify is None else verify
 
-    async def answer(self, messages: str | Sequence[Message | dict], as_of: date | str | None = None, *, trace: dict | None = None) -> Answer:
+    async def answer(self, messages: str | Sequence[Message | dict], as_of: date | str | None = None, *, trace: dict | None = None, scenario: ScenarioDates | dict | None = None, on_progress=None) -> Answer:
+        control = RunControl(max_models=self.client.settings.max_model_calls, max_searches=self.client.settings.max_search_calls, observer=on_progress)
+        with controlled_run(control):
+            result = await self._run_answer(messages, as_of, trace, scenario)
+            published = getattr(control, "published", set())
+            result.statements = [s.model_copy(update={"published": key in published and s.check.status in {"confirmed", "conditional"}}) for key, s in control.statements.items()]
+            result.scenario = getattr(control, "scenario", ScenarioDates())
+            result.verification = control.summary()
+            _record(trace, "result", answer=result.model_dump(mode="json"))
+            return Answer.model_validate(result.model_dump())
+
+    async def _run_answer(self, messages, as_of, trace, scenario):
         try:
             async with asyncio.timeout(self.client.settings.question_timeout):
-                result = await self._answer(messages, as_of, trace)
+                result = await self._answer(messages, as_of, trace, scenario)
+        except BudgetExhausted:
+            _record(trace, "error", kind="BudgetExhausted", message="request verification budget")
+            result = Answer(status="error", text="Исчерпан бюджет проверки ответа. Основания не проверены полностью.")
         except (ModelAPIError, TimeoutError) as exc:
             _record(trace, "error", kind=type(exc).__name__, message="API/timeout")
             logger.warning("answer: техническая ошибка API или тайм-аут")
@@ -300,11 +415,52 @@ class LegalAssistant:
             _record(trace, "error", kind=type(exc).__name__, message="search component")
             logger.error("answer: техническая ошибка поискового компонента")
             result = Answer(status="error", text="Техническая ошибка поискового компонента. Основания в базе не проверены.")
-        _record(trace, "result", answer=result.model_dump(mode="json"))
+        control = current_control()
+        if result.status == "error" and control:
+            retained = [(key, s) for key, s in control.statements.items()
+                        if s.check.mechanical_pass and s.check.semantic_checked
+                        and s.check.status in {"confirmed", "conditional"} and s.supports]
+            if retained:
+                gap = "Дополнительная проверка прервана технической ошибкой или лимитом; полнота оснований и ограничений не установлена"
+                control.published = {key for key, _ in retained}
+                result = Answer(status="partial", text="\n".join(f"{s.text} [{i+1}]" for i, (_, s) in enumerate(retained)) + "\n" + gap + ".",
+                                citations=[c.model_copy(update={"claim_index": i}) for i, (_, s) in enumerate(retained) for c in s.supports],
+                                missing_info=[gap])
         return result
 
-    async def _checked(self, candidate: list[Claim], evidence, filters, intent, reference, data, trace):
+    async def _structured(self, prompt, data, schema):
+        control = current_control()
+        if control:
+            control.model(schema.__name__)
+            control.reserved_model_calls += 1
+        try:
+            return await self.client.structured(prompt, data, schema)
+        finally:
+            if control:
+                control.reserved_model_calls -= 1
+
+    async def _verdict(self, data, count):
+        verdict = await self._structured(VERIFY_PROMPT, data, Verdict)
+        for attempt in range(2):
+            indices = [c.index for c in verdict.checks] if verdict.checks else verdict.supported
+            error = None
+            if len(indices) != len(set(indices)) or any(i < 0 or i >= count for i in indices):
+                error = "Индексы утверждений должны быть уникальными и принадлежать диапазону 0.." + str(count-1)
+            elif verdict.checks and set(indices) != set(range(count)):
+                error = "Нужен один checks для каждого из индексов: " + str(list(range(count)))
+            if error is None:
+                return verdict
+            if attempt or not current_control().repair():
+                raise ModelProtocolError("verify: " + error)
+            try:
+                verdict = await self._structured(VERIFY_PROMPT, {**data, "repair": {"error": error, "invalid_verdict": verdict.model_dump(mode="json")}}, Verdict)
+            except AssertionError:
+                raise ModelProtocolError("verify: исправление не получено") from None
+
+    async def _checked(self, candidate: list[Claim], evidence, filters, intent, reference, data, trace, *, allow_repair=True):
         valid, dropped = [], set()
+        invalid, failures = [], []
+        control = current_control()
         for index, claim in enumerate(candidate):
             try:
                 citations = validate_supports(Draft(status="answer", claims=[claim]), evidence, filters, intent.parts, temporal_mode=intent.temporal_mode, reference=reference)
@@ -313,6 +469,11 @@ class LegalAssistant:
                 supports = [s.model_copy(update={"quote": c.quote}) for s, c in zip(claim.supports, citations)]
                 valid.append(claim.model_copy(update={"supports": supports}))
             except CitationError as exc:
+                invalid.append(claim)
+                failures.append(str(exc))
+                if control:
+                    safe = claim.model_copy(update={"limitations": [], "conditions": [c.model_copy(update={"supports": []}) for c in claim.conditions]})
+                    control.statements[statement_key(claim)] = build_statement(safe, evidence, filters, mechanical=False, reasons=[str(exc)])
                 dropped.update(p for p in claim.addresses if 0 <= p < len(intent.parts))
                 if not any(0 <= p < len(intent.parts) for p in claim.addresses):
                     dropped.update(range(len(intent.parts)))
@@ -320,27 +481,65 @@ class LegalAssistant:
         gaps = []
         if self.verify and valid:
             verification = {**data,
-                            "claims": [{**claim.model_dump(), "claim_index": i}
+                            "claims": [{**claim.model_dump(mode="json"), "claim_index": i}
                                        for i, claim in enumerate(valid)],
                             "allowed_claim_indices": list(range(len(valid)))}
-            verdict = await self.client.structured(VERIFY_PROMPT, verification, Verdict)
-            selected = verdict.supported
+            verdict = await self._verdict(verification, len(valid))
+            selected = [c.index for c in verdict.checks if c.status in {"confirmed", "conditional"}] if verdict.checks else verdict.supported
             if len(set(selected)) != len(selected) or any(i < 0 or i >= len(valid) for i in selected):
                 raise ModelProtocolError("verify: некорректные индексы выводов")
+            checks = {c.index: c for c in verdict.checks}
+            if verdict.checks and (len(checks) != len(verdict.checks) or set(checks) != set(range(len(valid)))):
+                raise ModelProtocolError("verify: нужен один результат для каждого утверждения")
             for i, claim in enumerate(valid):
+                semantic = checks.get(i) or SemanticCheck(index=i, status="confirmed" if i in selected else "insufficient", reasons=[] if i in selected else ["Модель не подтвердила вывод"])
+                try:
+                    citations = validate_supports(Draft(status="answer", claims=[claim]), evidence, filters, intent.parts, temporal_mode=intent.temporal_mode, reference=reference)
+                    statement = build_statement(claim, evidence, filters, citations=citations, semantic=semantic)
+                    if statement.check.status not in {"confirmed", "conditional"}:
+                        selected = [n for n in selected if n != i]
+                except CitationError as exc:
+                    invalid.append(claim)
+                    failures.append(str(exc))
+                    semantic = SemanticCheck(index=i, status="insufficient", reasons=[str(exc)])
+                    statement = build_statement(claim.model_copy(update={"limitations": [], "conditions": []}), evidence, filters, mechanical=False, semantic=semantic)
+                    selected = [n for n in selected if n != i]
+                if control:
+                    control.statements[statement_key(claim)] = statement
+                if any(c.status == "unknown" for c in statement.conditions):
+                    gaps.append("Не установлены условия: " + "; ".join(c.text for c in statement.conditions if c.status == "unknown"))
+                if any(c.status == "not_met" for c in statement.conditions):
+                    gaps.append("Условие не выполнено; нужно основание для текущего сценария: " + "; ".join(c.text for c in statement.conditions if c.status == "not_met"))
                 if i not in selected:
                     dropped.update(claim.addresses)
                     _record(trace, "rejected_claim", index=i, reason="semantic verifier", addresses=claim.addresses)
             valid = [c for i, c in enumerate(valid) if i in selected]
-            gaps = verdict.missing_info
+            gaps += verdict.missing_info
+        elif valid:
+            for claim in valid:
+                if control:
+                    control.statements[statement_key(claim)] = build_statement(claim, evidence, filters, citations=linked_citations(claim.supports, evidence, role="support"))
+            gaps.append("Смысловая проверка отключена; выводы проверены только формально")
+        repairable = any(any(term in reason for term in ("Подмена документа", "Нет точной цитаты", "Несуществующая часть", "Несуществующий источник")) for reason in failures)
+        if allow_repair and invalid and repairable and control and control.repair():
+            try:
+                fixed = await self._structured(DRAFT_PROMPT, {**data, "previous_claims": [c.model_dump() for c in valid], "repair": {"errors": failures, "invalid_claims": [c.model_dump() for c in invalid], "instruction": "Исправь только неподтверждённые ссылки и структуру, сохрани юридические условия. Верни только исправленные claims."}}, Draft)
+                repaired, still_dropped, repair_gaps = await self._checked(fixed.claims, evidence, filters, intent, reference, data, trace, allow_repair=False)
+                valid += repaired
+                dropped = (dropped - {p for c in repaired for p in c.addresses}) | still_dropped
+                gaps += repair_gaps
+            except (ModelAPIError, BudgetExhausted, ValueError, AssertionError):
+                gaps.append("Техническая ошибка исправления; ранее подтверждённые части сохранены")
         return valid, dropped, gaps
 
-    async def _answer(self, messages, as_of, trace) -> Answer:
+    async def _answer(self, messages, as_of, trace, scenario=None) -> Answer:
         history = parse_messages(messages)
         when = date.fromisoformat(as_of) if isinstance(as_of, str) else as_of
         reference = datetime.now(timezone(timedelta(hours=3))).date()
-        context = {"history": [m.model_dump() for m in history], "as_of": when.isoformat() if when else None, "reference_date": reference.isoformat()}
-        intent = await self.client.structured(INTENT_PROMPT, context, Intent)
+        explicit_scenario = ScenarioDates.model_validate(scenario) if scenario is not None else ScenarioDates()
+        current_control().scenario = explicit_scenario
+        context = {"history": [m.model_dump() for m in history], "as_of": when.isoformat() if when else None, "reference_date": reference.isoformat(), "scenario": explicit_scenario.model_dump(mode="json")}
+        intent = await self._structured(INTENT_PROMPT, context, Intent)
         _record(trace, "intent", intent=intent.model_dump(mode="json"))
         if intent.action == "out_of_scope":
             return Answer(status="out_of_scope", text="Я помогаю с юридическими вопросами по предоставленной базе документов. Сформулируйте такой вопрос.")
@@ -349,10 +548,37 @@ class LegalAssistant:
         if intent.action == "clarify":
             question = intent.clarification or "Уточните договор, контрагента и дату рассматриваемого события."
             return Answer(status="clarify", text=question, missing_info=[question])
-        filters = intent.filters
+        filters = intent.filters.model_copy(update={"purpose": "grounds", "anchor_document_ids": []})
+        if scenario is not None:
+            supplied = ScenarioDates.model_validate(scenario)
+            merged = filters.scenario.model_copy(deep=True)
+            for kind in ("contract_signed", "specification_signed", "delivery", "event"):
+                if getattr(supplied, kind) is not None:
+                    setattr(merged, kind, getattr(supplied, kind))
+            merged.facts.update(supplied.facts)
+            legacy_kind = {"specification_signed_at": "specification_signed", "document_signed": "contract_signed"}.get(filters.date_kind, filters.date_kind)
+            filters = filters.model_copy(update={"scenario": merged, "event_date": None if legacy_kind in {"contract_signed", "specification_signed", "delivery", "event"} and getattr(supplied, legacy_kind) is not None else filters.event_date})
+        # Recover only a unique explicit signing date when Intent supplied no date.
+        if when is None and filters.event_date is None and not any(
+            getattr(filters.scenario, kind)
+            for kind in ("contract_signed", "specification_signed", "delivery", "event")
+        ):
+            inferred = infer_signed_date(history[-1].content)
+            if inferred is not None:
+                kind, span = inferred
+                inferred_scenario = filters.scenario.model_copy(deep=True)
+                setattr(inferred_scenario, kind, span)
+                filters = filters.model_copy(update={"scenario": inferred_scenario, "governing_date": kind})
+                _record(trace, "date_recovery", kind=kind, period=span.model_dump(mode="json"))
         if when:
-            filters = filters.model_copy(update={"event_date": when, "date_kind": filters.date_kind or "event"})
-        if intent.temporal_mode in {"historical", "future"} and not filters.event_date:
+            explicit_dates = filters.scenario.model_copy(deep=True)
+            kind = {"specification_signed_at": "specification_signed", "document_signed": "contract_signed"}.get(filters.date_kind, filters.date_kind) or "event"
+            if kind in {"contract_signed", "specification_signed", "delivery", "event"}:
+                setattr(explicit_dates, kind, parse_date_span(when.isoformat()))
+            filters = filters.model_copy(update={"event_date": when, "date_kind": filters.date_kind or "event", "scenario": explicit_dates})
+        current_control().scenario = scenario_for(filters)
+        context["scenario"] = current_control().scenario.model_dump(mode="json")
+        if intent.temporal_mode in {"historical", "future"} and not filters.event_date and not governing_span(filters):
             question = "Уточните дату события, для которого нужно проверить редакцию нормы."
             return Answer(status="clarify", text=question, missing_info=["Дата рассматриваемого события"])
         collected: dict[str, Evidence] = {}
@@ -361,6 +587,7 @@ class LegalAssistant:
         unresolved: set[int] = set()
         best = None
         evidence: list[Evidence] = []
+        context_evidence: list[Evidence] = []
         gaps = []
         query = intent.query
         query_history = set()
@@ -369,18 +596,26 @@ class LegalAssistant:
                 if query in query_history:
                     break
                 query_history.add(query)
+                search_filters = filters if not attempt else filters.model_copy(update={"purpose": "limitations", "anchor_document_ids": list(dict.fromkeys(e.document_id for e in collected.values()))[:20]})
+                control = current_control()
                 bundle_search = getattr(self.search, "search_bundle", None)
                 bundle_adapter = getattr(self.search, "bundle_result", None)
                 if callable(bundle_search) and callable(bundle_adapter):
-                    search_parts = intent.parts if not attempt else targets
+                    parts = list(dict.fromkeys((intent.parts if not attempt else targets) or intent.parts))
+                    available = control.max_searches - control.searches
+                    limit = max(1, available - (1 if not attempt and available > 1 else 0))
+                    selected_parts = parts[:limit]
+                    control.query_parts_omitted += [p for p in parts[len(selected_parts):] if p not in control.query_parts_omitted]
+                    for _ in selected_parts:
+                        control.search(search_filters.purpose)
                     bundle = await bundle_search(
-                        search_parts or intent.parts,
-                        filters,
+                        selected_parts, search_filters,
                         top_k=self.client.settings.top_k,
                         max_context_chars=MAX_EVIDENCE_CHARS,
                         max_context_chunks=self.client.settings.top_k * 2,
                         query_context=query,
                         existing_chunk_ids=tuple(collected),
+                        recovery_rounds=0, recovery_query_budget=0,
                     )
                     found = SearchResult.model_validate(bundle_adapter(bundle))
                     _record(trace, "search_bundle", attempt=attempt,
@@ -389,43 +624,58 @@ class LegalAssistant:
                             omitted_chunk_ids=bundle["omitted_chunk_ids"],
                             context_chars=bundle["context_chars"],
                             evidence_chars=bundle["evidence_chars"],
+                            query_parts_omitted=parts[len(selected_parts):],
                             recovery=bundle.get("recovery", {}),
                             pipeline=bundle.get("pipeline", {}))
                 else:
-                    found = SearchResult.model_validate(await self.search.search(query, filters))
-                _record(trace, "search", attempt=attempt, query=query, filters=filters.model_dump(mode="json"), evidence=[e.model_dump(mode="json") for e in found.evidence], missing_info=found.missing_info)
+                    control.search(search_filters.purpose)
+                    found = SearchResult.model_validate(await self.search.search(query, search_filters))
+                if attempt:
+                    control.limitation_search_done = True
+                _record(trace, "search", attempt=attempt, purpose=search_filters.purpose, query=query, filters=search_filters.model_dump(mode="json"), evidence=[e.model_dump(mode="json") for e in found.evidence], missing_info=found.missing_info)
+
                 if found.clarification:
                     if checked:
-                        return _response(checked, gaps + [found.clarification], evidence, filters, intent, reference)
+                        return _response(checked, gaps + [found.clarification], context_evidence, filters, intent, reference)
                     return Answer(status="clarify", text=found.clarification, missing_info=found.candidates or [found.clarification])
                 parties = {e.counterparty for e in found.evidence if e.counterparty}
                 candidates = list(dict.fromkeys(found.candidates))
                 if len(candidates) > 1 and not ((filters.contract_number or filters.document_id) and len(parties) == 1):
                     question = "Уточните контрагента: " + " или ".join(candidates) + "?"
                     if checked:
-                        return _response(checked, gaps + [question], evidence, filters, intent, reference)
+                        return _response(checked, gaps + [question], context_evidence, filters, intent, reference)
                     return Answer(status="clarify", text=question, missing_info=candidates)
                 for e in found.evidence:
+                    records = e.metadata.get("applicability_conditions", [])
+                    if records:
+                        states = [condition_status(c, current_control().scenario) for c in records]
+                        status = "varies" if "varies" in states else ("not_applicable" if "not_applicable" in states else ("applicable" if all(s == "applicable" for s in states) else "unknown"))
+                        e = e.model_copy(update={"metadata": {**e.metadata, "applicability_status": status}})
                     old = collected.get(e.chunk_id)
                     if old and (old.document_id != e.document_id or old.text != e.text or old.coordinates != e.coordinates):
                         raise ModelProtocolError("search: содержимое chunk_id изменилось внутри запроса")
                     if old is None and len(collected) < self.client.settings.top_k * 2 and sum(len(x.text) for x in collected.values()) + len(e.text) <= MAX_EVIDENCE_CHARS:
                         collected[e.chunk_id] = e
-                evidence, unavailable = [], []
+                evidence, unavailable, context_evidence = [], [], []
                 for e in collected.values():
                     issue = temporal_issue(e, filters, mode=intent.temporal_mode, reference=reference)
+                    span = governing_span(filters, e)
+                    if issue and span and span.precision != "day" and not e.applicability.current_only and (not e.applicability.valid_from or e.applicability.valid_from < span.end_exclusive) and (not e.applicability.valid_to or e.applicability.valid_to > span.start):
+                        issue = None  # частичный период: окончательная проверка по всем цитатам утверждения
                     if issue:
                         unavailable.append(issue)
+                        context_evidence.append(e.model_copy(update={"metadata": {**e.metadata, "temporal_status": "not_applicable", "temporal_issue": issue}}))
                     else:
                         evidence.append(e)
-                novel = {e.chunk_id for e in evidence} - handled
+                        context_evidence.append(e)
+                novel = {e.chunk_id for e in context_evidence} - handled
                 _record(trace, "context", attempt=attempt, evidence_ids=[e.chunk_id for e in evidence], unavailable_editions=list(dict.fromkeys(unavailable)))
                 if not novel and attempt:
                     break
                 if evidence and novel:
                     handled.update(novel)
-                    data = {**context, "parts": intent.parts, "query": query, "filters": filters.model_dump(mode="json"), "temporal_mode": mode_for(filters, intent.temporal_mode, reference), "evidence": [e.model_dump(mode="json") for e in evidence], "search_missing_info": found.missing_info, "unavailable_editions": list(dict.fromkeys(unavailable)), "previous_claims": [c.model_dump() for c in checked]}
-                    raw = await self.client.structured(DRAFT_PROMPT, data, Draft)
+                    data = {**context, "parts": intent.parts, "query": query, "filters": filters.model_dump(mode="json"), "temporal_mode": mode_for(filters, intent.temporal_mode, reference), "evidence": [e.model_dump(mode="json") for e in context_evidence], "search_missing_info": found.missing_info, "unavailable_editions": list(dict.fromkeys(unavailable)), "previous_claims": [c.model_dump() for c in checked]}
+                    raw = await self._structured(DRAFT_PROMPT, data, Draft)
                     previous_keys = {_claim_key(c) for c in checked}
                     candidate = list(checked)
                     keys = set(previous_keys)
@@ -433,7 +683,9 @@ class LegalAssistant:
                         if _claim_key(claim) not in keys and len(candidate) < 10:
                             candidate.append(claim)
                             keys.add(_claim_key(claim))
-                    validated, rejected, verdict_gaps = await self._checked(candidate, evidence, filters, intent, reference, data, trace)
+                    validated, rejected, verdict_gaps = await self._checked(candidate, context_evidence, filters, intent, reference, data, trace)
+                    repaired = {p for c in validated if _claim_key(c) not in previous_keys for p in c.addresses}
+                    unresolved = (unresolved - repaired) | rejected
                     checked = validated
                     covered = {p for c in checked for p in c.addresses}
                     unresolved = (unresolved | rejected) - covered
@@ -442,21 +694,26 @@ class LegalAssistant:
                     gaps += ["Проверяемое основание для: " + intent.parts[i] for i in sorted(unresolved)]
                     if raw.status != "answer" and not gaps:
                         gaps = ["Обстоятельства для окончательного вывода"]
-                    best = _response(checked, gaps, evidence, filters, intent, reference, clarify=raw.status == "clarify")
+                    date_clarification = any("Уточните дату" in r for s in current_control().statements.values() for r in s.check.reasons)
+                    date_clarification = date_clarification or (not checked and any(c.status == "unknown" for s in current_control().statements.values() for c in s.conditions))
+                    best = _response(checked, gaps, context_evidence, filters, intent, reference, clarify=raw.status == "clarify" or date_clarification)
                     _record(trace, "attempt_result", attempt=attempt, answer=best.model_dump(mode="json"))
-                    if best.status in {"answer", "clarify"} or raw.status == "clarify":
+                    if (best.status in {"answer", "clarify"} and attempt) or (raw.status == "clarify" and not checked):
                         return best
                 elif not evidence:
                     gaps = found.missing_info + list(dict.fromkeys(unavailable)) or intent.parts
                     best = _response([], gaps, [], filters, intent, reference)
                 # Один адресный повтор, с теми же сущностями и датой; без смены роли.
                 targets = [p for i, p in enumerate(intent.parts) if i in unresolved or i not in {a for c in checked for a in c.addresses}]
-                query = (" ".join(targets or gaps or intent.parts) + " " + intent.query + " подтверждающие положения условия исключения")[:3000]
+                query = (" ".join(targets or intent.parts) + " " + intent.query + " ограничения исключения типовые формы иностранные контрагенты специальные условия допсоглашения редакции порядок действий")[:3000]
             except Exception as exc:
                 if attempt and best is not None and checked:
                     _record(trace, "error", kind=type(exc).__name__, message="technical error during bounded recovery")
-                    return _response(checked, best.missing_info + ["Техническая ошибка дополнительного поиска или проверки; оставшаяся часть не проверена"], evidence, filters, intent, reference)
+                    reason = "Достигнут лимит дополнительной проверки; оставшаяся часть не проверена" if isinstance(exc, BudgetExhausted) else "Техническая ошибка дополнительного поиска или проверки; оставшаяся часть не проверена"
+                    return _response(checked, best.missing_info + [reason], context_evidence, filters, intent, reference)
                 raise
+        if checked and not current_control().limitation_search_done:
+            return _response(checked, (best.missing_info if best else []) + ["Дополнительный поиск ограничений не выполнен"], context_evidence, filters, intent, reference)
         return best or _response([], intent.parts, [], filters, intent, reference)
 
 

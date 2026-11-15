@@ -5,6 +5,8 @@ services:
       - "127.0.0.1:${WEB_PORT:-8000}:8000"
     environment:
       DATA_DIR: /app/data
+      WEB_STATE_DIR: /state
+      OTOROP_KNOWLEDGE_CACHE_DIR: ${OTOROP_KNOWLEDGE_CACHE_DIR:-/state/knowledge}
       OTOROP_EMBEDDING_CACHE_DIR: ${OTOROP_EMBEDDING_CACHE_DIR:-/tmp/otorop/embeddings}
       OTOROP_KNOWLEDGE_CACHE_DIR: ${OTOROP_KNOWLEDGE_CACHE_DIR:-/tmp/otorop/knowledge}
       KNOWLEDGE_LLM_EXTRACTION: ${KNOWLEDGE_LLM_EXTRACTION:-0}
@@ -28,11 +30,14 @@ services:
       API_RETRIES: ${API_RETRIES:-2}
       QUESTION_TIMEOUT: ${QUESTION_TIMEOUT:-240}
       SEARCH_RETRIES: ${SEARCH_RETRIES:-1}
+      MAX_MODEL_CALLS: ${MAX_MODEL_CALLS:-6}
+      MAX_SEARCH_CALLS: ${MAX_SEARCH_CALLS:-3}
       TOP_K: ${TOP_K:-12}
       RERANKER_TOP_N: ${RERANKER_TOP_N:-8}
       VERIFY_ANSWER: ${VERIFY_ANSWER:-1}
     volumes:
       - ./data:/app/data:ro
+      - workbench-state:/state
     read_only: true
     tmpfs:
       - /tmp
@@ -41,3 +46,6 @@ services:
     cap_drop:
       - ALL
     init: true
+
+volumes:
+  workbench-state:

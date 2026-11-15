@@ -16,8 +16,120 @@
         "bbox": null
       },
       "edition": "Первоначальная редакция",
-      "claim_index": 0
+      "claim_index": 0,
+      "role": "support",
+      "applicability": {
+        "edition": "Первоначальная редакция",
+        "valid_from": "2026-01-01",
+        "valid_to": null,
+        "date_kind": "event",
+        "conditions": [],
+        "supersedes": [],
+        "current_only": false,
+        "snapshot_date": null,
+        "resolved": true
+      }
     }
   ],
-  "missing_info": []
+  "missing_info": [],
+  "schema_version": 2,
+  "statements": [
+    {
+      "statement_id": "s-af7d53ebca9438dd",
+      "text": "Оплата производится в течение 30 календарных дней после подписания УПД.",
+      "subject": {
+        "contract_number": "Т-1/2026",
+        "counterparty": "Тестовый поставщик",
+        "employee": null
+      },
+      "rule": "duty",
+      "value": {
+        "description": "Оплата поставленной партии",
+        "amount": null,
+        "currency": null,
+        "duration": "30",
+        "unit": "дней",
+        "day_type": "calendar",
+        "counted_from": "подписание УПД",
+        "action": "оплатить товар"
+      },
+      "conditions": [],
+      "period": {
+        "valid_from": "2026-01-01",
+        "valid_to": null,
+        "date_kind": "event"
+      },
+      "supports": [
+        {
+          "document_id": "example-contract",
+          "chunk_id": "example-contract:4.2",
+          "document_title": "Вымышленный договор № Т-1/2026",
+          "section": "п. 4.2",
+          "quote": "4.2. Оплата производится в течение 30 календарных дней после подписания УПД.",
+          "coordinates": {
+            "source_path": "example-contract.txt",
+            "char_start": 100,
+            "char_end": 176,
+            "page": null,
+            "bbox": null
+          },
+          "edition": "Первоначальная редакция",
+          "claim_index": 0,
+          "role": "support",
+          "applicability": {
+            "edition": "Первоначальная редакция",
+            "valid_from": "2026-01-01",
+            "valid_to": null,
+            "date_kind": "event",
+            "conditions": [],
+            "supersedes": [],
+            "current_only": false,
+            "snapshot_date": null,
+            "resolved": true
+          }
+        }
+      ],
+      "limitations": [],
+      "check": {
+        "status": "confirmed",
+        "mechanical_pass": true,
+        "semantic_checked": true,
+        "reasons": []
+      },
+      "published": true
+    }
+  ],
+  "scenario": {
+    "contract_signed": {
+      "start": "2026-01-01",
+      "end_exclusive": "2026-02-01",
+      "precision": "month",
+      "label": "2026-01"
+    },
+    "specification_signed": {
+      "start": "2026-10-02",
+      "end_exclusive": "2026-10-03",
+      "precision": "day",
+      "label": "2026-10-02"
+    },
+    "delivery": {
+      "start": "2026-11-10",
+      "end_exclusive": "2026-11-11",
+      "precision": "day",
+      "label": "2026-11-10"
+    },
+    "event": {
+      "start": "2026-11-01",
+      "end_exclusive": "2026-12-01",
+      "precision": "month",
+      "label": "2026-11"
+    },
+    "facts": {}
+  },
+  "verification": {
+    "model_calls": 3,
+    "search_calls": 2,
+    "repair_calls": 0,
+    "limitations_search_done": true
+  }
 }
