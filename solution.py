@@ -52,6 +52,20 @@ def render_answer(answer: Answer) -> str:
         if reference not in references:
             references.append(reference)
     text = answer.text + ("\nОснования:\n" + "\n".join(references) if references else "")
+    if len(text) > 10000 and answer.citations:
+        # Full excerpts are available in the report/web. CSV only requires
+        # identifiable documents and provisions, not repeating entire articles.
+        compact = list(dict.fromkeys(
+            f'[{c.claim_index + 1}] {c.document_title}, {c.section} ({c.edition}).'
+            for c in answer.citations
+        ))
+        text = answer.text + "\nОснования:\n" + "\n".join(compact)
+        if len(text) > 10000:
+            compact = list(dict.fromkeys(
+                f'[{c.claim_index + 1}] {c.coordinates.source_path}, {c.section} ({c.edition}).'
+                for c in answer.citations
+            ))
+            text = answer.text + "\nОснования:\n" + "\n".join(compact)
     if not text.strip() or len(text) > 10000:
         # Не обрезаем условие/исключение вместе с концом длинного ответа.
         raise SubmissionError("Ответ превышает лимит CSV")
@@ -155,8 +169,11 @@ async def _process(rows, engine, workers, budget=1120, *, report_path=None):
 
 
 async def run_submission(data_dir: Path, output: Path = Path("submission.csv"), *, engine=None, workers: int = 2, report_path: Path | None = None) -> dict[str, int]:
+    started = time.perf_counter()
     rows = load_questions(data_dir / "questions.csv")
     budget = float(env_value("RUN_TIMEOUT", default="1120"))
+    if not 0 < budget <= 1170:
+        raise SubmissionError("Некорректный бюджет времени")
     options = _runtime_options()
     report = report_path or env_value("RUN_REPORT") or getattr(options, "RUN_REPORT", None)
     report = Path(report) if report else None
@@ -182,8 +199,12 @@ async def run_submission(data_dir: Path, output: Path = Path("submission.csv"), 
                 if not env_value(setting):
                     os.environ[setting] = str(Path(tempfile.gettempdir()) / "otorop" / directory)
             client = LLMClient(settings)
-            search = await build_search(client)
-            results = await _process(rows, LegalAssistant(search, client), settings.max_workers, budget, report_path=report)
+            # The platform's deadline includes a cold index and embeddings.
+            # Leave time to close connections and atomically write the CSV.
+            async with asyncio.timeout(max(.001, budget - (time.perf_counter() - started))):
+                search = await build_search(client)
+            remaining = max(.001, budget - (time.perf_counter() - started))
+            results = await _process(rows, LegalAssistant(search, client), settings.max_workers, remaining, report_path=report)
         except Exception as exc:
             logging.getLogger(__name__).error("submission: ошибка конфигурации API или индекса")
             results = [("error", "Техническая ошибка настройки API или поискового индекса. Основания в базе не проверены.") for _ in rows]

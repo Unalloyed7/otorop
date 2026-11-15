@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+import asyncio
 import json
 from pathlib import Path
 import zipfile
@@ -206,6 +207,18 @@ async def test_embeddings_failure_falls_back_to_bm25(corpus, settings):
     assert any("через BM25" in message for message in backend.diagnostics)
 
 
+async def test_cold_embeddings_timeout_preserves_lexical_answer(corpus, settings, monkeypatch):
+    monkeypatch.setenv("DENSE_SEARCH_TIMEOUT", ".02")
+    class HangingClient:
+        def __init__(self): self.settings = settings
+        async def embeddings(self, texts): await asyncio.Event().wait()
+    backend = SchemaSearchBackend(create_search(corpus).index, client=HangingClient())
+    result = await asyncio.wait_for(backend.search("срок оплаты", SearchFilters(contract_number="Т-1/2026")), timeout=.5)
+    assert any(e.section == "4.2" for e in result.evidence)
+    assert backend.embedding_status == "disabled_after_error"
+    assert any("бюджет" in message for message in backend.diagnostics)
+
+
 async def test_embeddings_failure_uses_cooldown_and_recovers(corpus, settings, monkeypatch):
     monkeypatch.setenv(
         "OTOROP_EMBEDDING_CACHE_DIR",
@@ -369,7 +382,7 @@ async def test_contract_from_history_resolves_candidates(corpus, local_settings)
     backend = create_search(corpus)
     result = await backend.search("срок оплаты по Т-1/2026", filters)
     clause = next(e for e in result.evidence if e.section == "4.2")
-    client = FakeClient(local_settings, intent(filters=filters), draft(clause), {"supported": [0]}, {"status": "answer", "claims": []}, {"supported": [0]})
+    client = FakeClient(local_settings, intent(filters=filters), draft(clause), {"supported": [0]}, {"supported": [0]})
     history = [{"role": "user", "content": "Договор Т-1/2026."}, {"role": "assistant", "content": "Какой вопрос?"}, {"role": "user", "content": "Как оплачиваем Альфе?"}]
     answer = await LegalAssistant(backend, client).answer(history)
     assert answer.status == "answer"
@@ -472,7 +485,7 @@ async def test_real_retrieval_and_engine_write_same_csv(corpus, local_settings):
     filters = SearchFilters(contract_number="Т-1/2026")
     found = await backend.search("Срок оплаты по Т-1/2026", filters)
     clause = next(e for e in found.evidence if e.section == "4.2")
-    client = FakeClient(local_settings, intent(filters=filters), draft(clause), {"supported": [0]}, {"status": "answer", "claims": []}, {"supported": [0]})
+    client = FakeClient(local_settings, intent(filters=filters), draft(clause), {"supported": [0]}, {"supported": [0]})
     engine = LegalAssistant(backend, client)
     (corpus / "questions.csv").write_text('id,question\n001,"Срок оплаты по Т-1/2026?"\n', encoding="utf-8")
     output = corpus / "submission.csv"
@@ -501,6 +514,6 @@ async def test_archive_rules_remain_available(corpus, local_settings):
     found = await backend.search("Оригиналы архив кабинет", SearchFilters())
     archive = next(e for e in found.evidence if "кабинет 412" in e.text)
     plan = intent().model_copy(update={"query": "Оригиналы архив кабинет"})
-    client = FakeClient(local_settings, plan, draft(archive, text="Оригиналы хранятся в архиве, кабинет 412."), {"supported": [0]}, {"status": "answer", "claims": []}, {"supported": [0]})
+    client = FakeClient(local_settings, plan, draft(archive, text="Оригиналы хранятся в архиве, кабинет 412."), {"supported": [0]}, {"supported": [0]})
     result = await LegalAssistant(backend, client).answer("Где хранятся оригиналы?")
     assert result.status == "answer" and "412" in result.text

@@ -7,6 +7,7 @@ import sys
 import threading
 import zipfile
 import pytest
+from conftest import with_coverage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -37,7 +38,7 @@ def test_cli_with_real_http_csv_and_archive(tmp_path, mode):
             if "Разбери последнюю" in system:
                 reply = {"action": "search", "query": "Срок оплаты Т-1/2026", "parts": ["Срок оплаты"], "filters": {"contract_number": "Т-1/2026"}}
             elif "Независимо проверь" in system:
-                reply = {"supported": [0]}
+                reply = with_coverage({"supported": [0]}, data)
             else:
                 evidence = data["evidence"][0]
                 quote = next(line for line in evidence["text"].split("\n") if line.startswith("4.2."))

@@ -51,7 +51,7 @@ async def test_intent_clarification(settings):
     plan = intent().model_copy(update={"action": "clarify", "clarification": "Назовите контрагента."})
     search = FakeSearch()
     result = await LegalAssistant(search, FakeClient(settings, plan)).answer("Как у Альфы?")
-    assert result.status == "clarify" and not search.requests
+    assert result.status == "clarify" and search.requests
 
 
 async def test_history_and_contract_not_repeated(settings, evidence):
@@ -175,7 +175,7 @@ async def test_technical_errors_never_mean_no_information(settings, evidence, st
 
 
 async def test_no_state_between_calls(settings, evidence):
-    client = FakeClient(settings, intent(filters=SearchFilters(contract_number="Т-1/2026")), draft(evidence), {"supported": [0]}, intent().model_copy(update={"action": "clarify", "clarification": "Какой договор?"}))
+    client = FakeClient(settings, intent(filters=SearchFilters(contract_number="Т-1/2026")), draft(evidence), {"supported": [0]}, intent().model_copy(update={"action": "clarify", "clarification": "Какой договор?"}), {"status": "clarify", "missing_info": ["Какой договор?"]})
     engine = LegalAssistant(FakeSearch([evidence]), client)
     await engine.answer("Договор Т-1/2026. Срок оплаты?")
     result = await engine.answer("А у него?")

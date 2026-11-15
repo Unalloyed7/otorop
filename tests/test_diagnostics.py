@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from assistant import LegalAssistant
-from conftest import FakeSearch
+from conftest import FakeSearch, with_coverage
 from diagnostics import active_run, append_report, capture_run
 from llm_client import LLMClient
 from solution import run_submission
@@ -27,7 +27,7 @@ async def test_report_is_scoped_per_concurrent_question(settings, evidence, tmp_
         if "Разбери последнюю" in prompt:
             result = {"action": "search", "query": "Оплата", "parts": ["Оплата"]}
         elif "Независимо проверь" in prompt:
-            result = {"supported": [0]}
+            result = with_coverage({"supported": [0]}, json.loads(body["messages"][1]["content"]))
         else:
             result = {"status": "answer", "claims": [{"text": "Оплата в течение 30 календарных дней после подписания УПД.", "addresses": [0], "supports": [{"chunk_id": evidence.chunk_id, "document_id": evidence.document_id, "quote": evidence.text.split("\n")[0]}]}]}
         return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(result, ensure_ascii=False)}}]})

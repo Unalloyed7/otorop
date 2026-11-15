@@ -13,7 +13,7 @@ async def test_csv_same_engine_real_file(settings, evidence, tmp_path):
     rows = [("001", 'Договор, "условия"\nСрок оплаты?'), ("002", "Иной договор?")]
     with (tmp_path / "questions.csv").open("w", encoding="utf-8", newline="") as f:
         w = csv.writer(f); w.writerow(["id", "question"]); w.writerows(rows)
-    client = FakeClient(settings, intent(), draft(evidence), {"supported": [0]}, intent().model_copy(update={"action": "clarify", "clarification": "Какой договор?"}))
+    client = FakeClient(settings, intent(), draft(evidence), {"supported": [0]}, intent().model_copy(update={"action": "clarify", "clarification": "Какой договор?"}), {"status": "clarify", "missing_info": ["Какой договор?"]})
     engine = LegalAssistant(FakeSearch([evidence]), client)
     counts = await run_submission(tmp_path, tmp_path / "submission.csv", engine=engine, workers=1)
     validate_submission(tmp_path / "submission.csv", ["001", "002"])
@@ -57,7 +57,11 @@ async def test_errors_still_produce_one_answer_per_id(tmp_path, monkeypatch):
 def test_large_answer_is_not_cut_mid_condition(evidence):
     from schemas import Citation
     c = Citation(document_id=evidence.document_id, chunk_id=evidence.chunk_id, document_title=evidence.document_title, section=evidence.section, quote="я" * 4000, coordinates=evidence.coordinates, edition="Тест", claim_index=0)
-    with pytest.raises(SubmissionError): render_answer(Answer(status="answer", text="я" * 7000, citations=[c]))
+    text = "я" * 7000
+    rendered = render_answer(Answer(status="answer", text=text, citations=[c]))
+    assert rendered.startswith(text + "\nОснования:")
+    assert c.document_title in rendered and c.section in rendered
+    assert len(rendered) <= 10000
 
 
 async def test_run_budget_preserves_completed_answers_and_all_ids(tmp_path, monkeypatch):

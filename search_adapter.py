@@ -131,6 +131,10 @@ class LexicalSearch:
             raise SearchError("Нет документов для индекса")
         self.documents = documents
         self.evidence = [e for d in documents for e in chunks(d)]
+        from documents import _extract_metadata
+        types = {d.document_id: _extract_metadata(d.path, d.text)["document_type"] for d in documents}
+        for e in self.evidence:
+            e.metadata["document_type"] = types[e.document_id]
         self.client = client
         self.top_k = top_k
         self._terms = [Counter(tokens(e.document_title + " " + e.text)) for e in self.evidence]
@@ -162,25 +166,32 @@ class LexicalSearch:
 
     async def search(self, query: str, filters: SearchFilters) -> SearchResult:
         # Точное сравнение, без подмены Альфа-Трейд на Альфа-Трейдинг.
+        selected_party = filters.counterparty
         if filters.counterparty:
             parties = sorted({d.counterparty for d in self.documents if d.counterparty})
             exact = [p for p in parties if party_key(p) == party_key(filters.counterparty)]
             near = [p for p in parties if party_key(filters.counterparty) in party_key(p)]
-            if not exact and len(near) > 1 and not filters.contract_number:
+            if not exact and len(near) > 1 and not filters.contract_number and filters.document_scope in {"all", "contract"}:
                 return SearchResult(clarification="Уточните контрагента: " + " или ".join(near) + "?", candidates=near)
-            if not exact:
-                return SearchResult(missing_info=["Договор с контрагентом " + filters.counterparty])
-        if filters.contract_number and not any(d.contract_number and norm(d.contract_number) == norm(filters.contract_number) for d in self.documents):
-            return SearchResult(missing_info=["Договор № " + filters.contract_number])
+            if not exact and len(near) == 1:
+                selected_party = near[0]
         query_terms = set(tokens(query))
         scored = []
         for e, terms in zip(self.evidence, self._terms):
+            kind = e.metadata["document_type"]
+            global_rule = kind in {"law", "internal_policy", "letter"}
+            if filters.document_scope == "policy" and kind not in {"internal_policy", "letter"}:
+                continue
+            if filters.document_scope == "law" and kind != "law":
+                continue
+            if filters.document_scope == "contract" and kind not in {"agreement", "amendment"}:
+                continue
             if filters.document_id and e.document_id != filters.document_id:
                 continue
             # Глобальные регламенты и законы сохраняются при фильтре договора.
-            if e.contract_number and filters.contract_number and norm(e.contract_number) != norm(filters.contract_number):
+            if not global_rule and filters.contract_number and norm(e.contract_number or "") != norm(filters.contract_number):
                 continue
-            if e.counterparty and filters.counterparty and party_key(e.counterparty) != party_key(filters.counterparty):
+            if not global_rule and selected_party and party_key(e.counterparty or "") != party_key(selected_party):
                 continue
             size = sum(terms.values())
             score = sum(math.log(1 + (len(self.evidence) - self._df[t] + .5) / (self._df[t] + .5)) *
