@@ -26,7 +26,7 @@ def runtime_configuration(client=None):
     settings = getattr(client, "settings", None)
     result = {"code_revision": os.environ.get("CODE_VERSION"), "engine_sha256": digest.hexdigest()}
     if settings:
-        result.update({key: getattr(settings, key, None) for key in ("model", "embedding_model", "reranker_model", "temperature", "max_tokens", "verify", "max_workers", "max_model_calls", "max_search_calls", "question_timeout", "search_retries", "timeout", "retries", "top_k", "reranker_top_n")})
+        result.update({key: getattr(settings, key, None) for key in ("model", "embedding_model", "reranker_model", "temperature", "max_tokens", "verify", "json_mode", "max_workers", "max_model_calls", "max_search_calls", "question_timeout", "search_retries", "timeout", "retries", "top_k", "reranker_top_n")})
     return result
 
 

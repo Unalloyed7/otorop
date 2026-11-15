@@ -35,6 +35,7 @@ services:
       TOP_K: ${TOP_K:-12}
       RERANKER_TOP_N: ${RERANKER_TOP_N:-8}
       VERIFY_ANSWER: ${VERIFY_ANSWER:-1}
+      LLM_JSON_MODE: ${LLM_JSON_MODE:-0}
     volumes:
       - ./data:/app/data:ro
       - workbench-state:/state

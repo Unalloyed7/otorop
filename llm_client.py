@@ -45,7 +45,15 @@ def compact_evidence(data: dict) -> tuple[dict, dict, dict]:
         chunk_alias = chunk_ids.setdefault(original_chunk, f"e{len(chunk_ids)+1}")
         common = {key: source[key] for key in ("document_title", "contract_number", "counterparty", "applicability", "metadata") if key in source}
         if "metadata" in common:
-            common["metadata"] = {k: v for k, v in common["metadata"].items() if k not in {"score", "retrieval_reason"}}
+            metadata = common["metadata"]
+            common["metadata"] = {
+                key: metadata[key]
+                for key in ("applicability_status", "temporal_status")
+                if key in metadata
+            }
+            renewal = metadata.get("renewal")
+            if isinstance(renewal, dict) and "status" in renewal:
+                common["metadata"]["renewal"] = {"status": renewal["status"]}
         passage = {"chunk_id": chunk_alias, "document_id": document_alias, "section": source["section"], "text": source["text"]}
         if document_alias not in documents:
             documents[document_alias] = common
@@ -95,6 +103,7 @@ class Settings(BaseModel):
     top_k: int = Field(default=12, ge=1, le=40)
     reranker_top_n: int = Field(default=8, ge=1, le=40)
     verify: bool = True
+    json_mode: bool = False
     question_timeout: float = Field(default=240, gt=0, le=900, allow_inf_nan=False)
     search_retries: int = Field(default=1, ge=0, le=1)
     max_model_calls: int = Field(default=6, ge=3, le=12)
@@ -132,6 +141,7 @@ class Settings(BaseModel):
                 top_k=int(env_value("TOP_K", default="12")),
                 reranker_top_n=int(env_value("RERANKER_TOP_N", default="8")),
                 verify=env_value("VERIFY_ANSWER", default="1").lower() in {"1", "true", "yes"},
+                json_mode=env_value("LLM_JSON_MODE", default="0").lower() in {"1", "true", "yes"},
                 question_timeout=float(env_value("QUESTION_TIMEOUT", default="240")),
                 search_retries=int(env_value("SEARCH_RETRIES", default="1")),
                 max_model_calls=int(env_value("MAX_MODEL_CALLS", default="6")),
@@ -209,10 +219,13 @@ class LLMClient:
         raise AssertionError("Недостижимо")
 
     async def chat(self, messages: list[dict[str, str]]) -> str:
-        data = await self._post("/chat/completions", {
+        payload = {
             "model": self.settings.model, "messages": messages,
             "temperature": self.settings.temperature, "max_tokens": self.settings.max_tokens,
-        })
+        }
+        if self.settings.json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        data = await self._post("/chat/completions", payload)
         try:
             choice = data["choices"][0]
             content = choice["message"]["content"]
