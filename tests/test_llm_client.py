@@ -32,6 +32,18 @@ async def test_all_three_endpoints_and_models(settings):
     assert "response_format" not in requests[0][1]
 
 
+async def test_json_mode_requests_json_object(settings):
+    requests = []
+
+    def handle(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"ok": true}'}}]})
+
+    async with LLMClient(settings.model_copy(update={"json_mode": True}), transport=httpx.MockTransport(handle)) as client:
+        assert await client.chat([{"role": "user", "content": "JSON"}]) == '{"ok": true}'
+    assert requests[0]["response_format"] == {"type": "json_object"}
+
+
 @pytest.mark.parametrize("status,retry", [(429, True), (503, True), (401, False), (400, False)])
 async def test_bounded_retries_and_safe_diagnostics(settings, monkeypatch, status, retry):
     monkeypatch.setattr("llm_client.asyncio.sleep", lambda _: _immediate())
@@ -112,14 +124,17 @@ async def test_missing_models_are_not_guessed(settings):
 
 
 def test_env_aliases(monkeypatch):
-    for name in ["LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "OPENAI_MODEL", "EMB_MODEL", "RERANKER_MODEL"]:
+    for name in ["LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_JSON_MODE", "OPENAI_MODEL", "EMB_MODEL", "RERANKER_MODEL"]:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("OPENAI_BASE_URL", "https://proxy.test/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "test-only-key")
     monkeypatch.setenv("GEN_MODEL", "organizer-id")
     s = Settings.from_env()
     assert s.model == "organizer-id" and not s.reranker_model
+    assert not s.json_mode
     assert "test-only-key" not in repr(s)
+    monkeypatch.setenv("LLM_JSON_MODE", "1")
+    assert Settings.from_env().json_mode
 
 
 def test_invalid_settings_do_not_leak_input(monkeypatch):

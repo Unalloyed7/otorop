@@ -116,6 +116,27 @@ def test_case_suite_resolves_official_and_local_questions(tmp_path):
     assert len(cases) == 2 and documents == {"contract": "Договор № 1"}
 
 
+def test_case_suite_can_select_ids_and_reject_unknown_ids(tmp_path):
+    source_questions = tmp_path / "questions.csv"
+    source_questions.write_text("id,question\n001,Официальный вопрос\n", encoding="utf-8")
+    cases_path = tmp_path / "cases.json"
+    cases_path.write_text(json.dumps({
+        "documents": {},
+        "cases": [
+            {"question_id": "001", "expected_disposition": "answer", "required_claims": []},
+            {"id": "challenge-19", "question_id": None, "question": "Локальный вопрос",
+             "expected_disposition": "answer", "required_claims": []},
+        ],
+    }), encoding="utf-8")
+
+    cases, _, rows = load_case_suite(cases_path, source_questions, ["challenge-19"])
+
+    assert [row[0] for row in rows] == ["challenge-19"]
+    assert [case["id"] for case in cases] == ["challenge-19"]
+    with pytest.raises(ValueError, match="Неизвестные ID кейсов"):
+        load_case_suite(cases_path, source_questions, ["missing"])
+
+
 def test_case_questions_path_accepts_public_demo_file(tmp_path):
     demo_questions = tmp_path / "demo_questions.csv"
     demo_questions.write_text("id,question\n001,Вопрос\n", encoding="utf-8")

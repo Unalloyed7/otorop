@@ -87,7 +87,17 @@ def test_compaction_preserves_distinct_chunk_applicability_and_input(evidence):
     second = copy.deepcopy(first)
     second["chunk_id"] = "second"
     second["applicability"]["conditions"] = ["Только после подписания спецификации"]
-    second["metadata"]["applicability_status"] = "unknown"
+    first["metadata"] = {
+        "applicability_status": "applicable",
+        "temporal_status": "not_applicable",
+        "renewal": {"status": "unknown", "initial_valid_to": "2024-12-31"},
+        "provision_relations": [{"chunk_id": str(i)} for i in range(500)],
+        "coverage_by_part": {"basis": "x" * 10000},
+    }
+    second["metadata"] = {
+        **first["metadata"],
+        "applicability_status": "unknown",
+    }
     data = {"evidence": [first, second], "previous_claims": [{"supports": [{"chunk_id": first["chunk_id"], "document_id": first["document_id"]}]}]}
     original = copy.deepcopy(data)
     compact, docs, chunks = compact_evidence(data)
@@ -95,7 +105,17 @@ def test_compaction_preserves_distinct_chunk_applicability_and_input(evidence):
     assert docs == {"d1": first["document_id"]} and chunks["e2"] == "second"
     assert compact["documents"]["d1"]["applicability"] == first["applicability"]
     assert compact["evidence"][1]["applicability"] == second["applicability"]
-    assert compact["evidence"][1]["metadata"] == second["metadata"]
+    assert compact["documents"]["d1"]["metadata"] == {
+        "applicability_status": "applicable",
+        "temporal_status": "not_applicable",
+        "renewal": {"status": "unknown"},
+    }
+    assert compact["evidence"][1]["metadata"] == {
+        "applicability_status": "unknown",
+        "temporal_status": "not_applicable",
+        "renewal": {"status": "unknown"},
+    }
+    assert len(json.dumps(compact, ensure_ascii=False)) < len(json.dumps(original, ensure_ascii=False)) / 2
     assert compact["previous_claims"][0]["supports"][0]["chunk_id"] == "e1"
 
 

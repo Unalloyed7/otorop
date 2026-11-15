@@ -39,7 +39,7 @@ def case_questions_path(data_dir: Path) -> Path:
     )
 
 
-def load_case_suite(cases_path: Path, questions_path: Path):
+def load_case_suite(cases_path: Path, questions_path: Path, case_ids=None):
     payload = json.loads(cases_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or not isinstance(payload.get("cases"), list):
         raise ValueError("Файл кейсов должен содержать массив cases")
@@ -76,6 +76,19 @@ def load_case_suite(cases_path: Path, questions_path: Path):
         rows.append((run_id, question))
     if not rows:
         raise ValueError("Файл кейсов не содержит сценариев")
+    if case_ids is not None:
+        if len(case_ids) != len(set(case_ids)):
+            raise ValueError("ID кейсов для запуска не должны повторяться")
+        requested = set(case_ids)
+        known = {row[0] for row in rows}
+        unknown = requested - known
+        if unknown:
+            raise ValueError("Неизвестные ID кейсов: " + ", ".join(sorted(unknown)))
+        cases = [
+            case for case in cases
+            if (case.get("id") or case.get("question_id")) in requested
+        ]
+        rows = [row for row in rows if row[0] in requested]
     return cases, documents, rows
 
 
@@ -203,13 +216,13 @@ def compare_records(baseline, checked):
     return rows
 
 
-async def evaluate(data_dir: Path, output: Path, mode: str, cases_path: Path | None = None):
+async def evaluate(data_dir: Path, output: Path, mode: str, cases_path: Path | None = None, case_ids=None):
     settings = Settings.from_env()  # Никаких ключей/адресов в manifest и stdout.
     questions_path = case_questions_path(data_dir) if cases_path else data_dir / "questions.csv"
-    case_suite = load_case_suite(cases_path, questions_path) if cases_path else None
+    case_suite = load_case_suite(cases_path, questions_path, case_ids) if cases_path else None
     output.mkdir(parents=True, exist_ok=False)
     variants = [False, True] if mode == "both" else [mode == "1"]
-    manifest = {"model": settings.model, "embedding_model": settings.embedding_model, "reranker_model": settings.reranker_model, "temperature": settings.temperature, "max_tokens": settings.max_tokens, "search_retries": settings.search_retries, "questions_sha256": hashlib.sha256(questions_path.read_bytes()).hexdigest(), "evaluation": "independent runs; quality requires manual review; not an official score", "case_suite": {"count": len(case_suite[0]), "sha256": hashlib.sha256(cases_path.read_bytes()).hexdigest(), "automatic_semantic_scoring": False} if case_suite else None, "variants": {}}
+    manifest = {"model": settings.model, "embedding_model": settings.embedding_model, "reranker_model": settings.reranker_model, "temperature": settings.temperature, "max_tokens": settings.max_tokens, "search_retries": settings.search_retries, "questions_sha256": hashlib.sha256(questions_path.read_bytes()).hexdigest(), "evaluation": "independent runs; quality requires manual review; not an official score", "case_suite": {"count": len(case_suite[0]), "ids": [row[0] for row in case_suite[2]], "sha256": hashlib.sha256(cases_path.read_bytes()).hexdigest(), "automatic_semantic_scoring": False} if case_suite else None, "variants": {}}
     records = {}
     for verify in variants:
         label = "verify-1" if verify else "verify-0"
@@ -248,12 +261,15 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=Path(env_value("DATA_DIR", default="data")))
     parser.add_argument("--cases", type=Path, help="Запустить размеченный набор из evals/answer_cases.json")
+    parser.add_argument("--case-ids", nargs="+", help="Запустить только указанные ID из --cases")
     parser.add_argument("--output", type=Path, default=Path("reports") / datetime.now(timezone(timedelta(hours=3))).strftime("run-%Y%m%d-%H%M%S"))
     parser.add_argument("--verify", choices=["0", "1", "both"], default="both")
     args = parser.parse_args()
+    if args.case_ids and not args.cases:
+        parser.error("--case-ids можно использовать только вместе с --cases")
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
     try:
-        asyncio.run(evaluate(args.data_dir, args.output, args.verify, args.cases))
+        asyncio.run(evaluate(args.data_dir, args.output, args.verify, args.cases, args.case_ids))
     except ModelAPIError:
         print("Доступ к API не настроен. Официальный прокси выдаётся только при запуске на платформе; локально нужны собственные разрешённые реквизиты.", file=sys.stderr)
         return 2
