@@ -4,6 +4,7 @@ import asyncio
 
 import httpx
 import pytest
+from conftest import with_coverage
 
 from assistant import LegalAssistant, validate_supports, CitationError
 from conftest import FakeClient, FakeSearch, draft, intent
@@ -162,7 +163,7 @@ async def test_one_format_repair_has_concrete_errors_and_same_engine(settings, e
                 assert data["repair"]["details"][0]["path"] == ["filters", "unknown"]
                 reply = {"action": "search", "query": "оплата", "parts": ["оплата"]}
         elif "Независимо проверь" in prompt:
-            reply = {"supported": [0]}
+            reply = with_coverage({"supported": [0]}, data)
         else:
             e = data["evidence"][0]
             reply = draft(evidence)
@@ -206,8 +207,10 @@ async def test_general_rule_exception_amendment_conditional_result(settings, evi
     conditional = draft(exception, text="Если используется типовая форма без изменений, договор согласуется только с главным бухгалтером.")
     conditional["claims"][0]["conditions"] = [{"text": "Типовая форма без изменений", "key": "standard_form_unchanged", "expected": True}]
     ref = lambda e: {"document_id": e.document_id, "chunk_id": e.chunk_id, "quote": e.text}
-    client = FakeClient(settings, intent(), first, {"supported": [0]}, conditional,
-        {"checks": [{"index": 0, "status": "contradiction", "reasons": ["Есть специальное исключение"], "limitations": [ref(exception)]}, {"index": 1, "status": "conditional", "limitations": [ref(amendment)]}]})
+    client = FakeClient(settings, intent(), first, {"supported": [0]},
+        {"checks": [{"index": 0, "status": "contradiction", "reasons": ["Есть специальное исключение"], "limitations": [ref(exception)]}],
+         "coverage": [{"part_index": 0, "status": "missing", "evidence_available": True}]},
+        conditional, {"checks": [{"index": 0, "status": "conditional", "limitations": [ref(amendment)]}]})
     search = Search()
     answer = await LegalAssistant(search, client).answer("Кто согласует?")
     assert search.calls == ["grounds", "limitations"]
@@ -247,7 +250,7 @@ async def test_format_repair_is_per_request_not_shared_across_concurrent_answers
                 reply["unknown"] = None
         elif "Независимо проверь" in system:
             assert data["scenario"]["facts"]["case"] == question
-            reply = {"supported": [0]}
+            reply = with_coverage({"supported": [0]}, data)
         else:
             e = data["evidence"][0]
             reply = draft(evidence)

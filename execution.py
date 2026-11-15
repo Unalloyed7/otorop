@@ -20,6 +20,8 @@ class RunControl:
     statements: dict = field(default_factory=dict)
     query_parts_omitted: list = field(default_factory=list)
     limitation_search_done: bool = False
+    incomplete_parts: list[int] = field(default_factory=list)
+    clarification_needed: bool = False
 
     def model(self, schema):
         if self.models >= self.max_models:
