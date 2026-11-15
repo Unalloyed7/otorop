@@ -199,7 +199,8 @@ async def test_probation_question_with_real_corpus_and_confirmed_verdict(setting
     assert answer.status == "answer" and answer.missing_info == []
     assert answer.citations[0].quote == quote
     assert next(s for s in trace["stages"] if s["stage"] == "search_bundle")["gaps"]
-    backend.search_bundle.assert_awaited_once()
+    assert backend.search_bundle.await_count == 2
+    assert answer.verification["limitations_search_done"]
 
 
 async def test_recovery_scores_do_not_evict_original_ground(tmp_path):

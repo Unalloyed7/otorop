@@ -5,6 +5,7 @@ import zipfile
 
 import httpx
 import pytest
+from conftest import with_coverage
 
 from assistant import LegalAssistant, parse_messages
 from conftest import FakeSearch
@@ -130,7 +131,7 @@ async def test_aliases_round_trip_without_accepting_cross_document_citation(sett
             reply = {"action": "search", "query": "оплата", "parts": ["оплата"]}
         elif "Независимо проверь" in system:
             assert data["claims"][0]["supports"][0]["chunk_id"] == "e1"
-            reply = {"supported": [0]}
+            reply = with_coverage({"supported": [0]}, data)
         else:
             assert data["evidence"][0]["chunk_id"] == "e1"
             assert data["documents"]["d1"]["document_title"] == evidence.document_title

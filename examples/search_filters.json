@@ -33,5 +33,6 @@
   },
   "governing_date": "event",
   "purpose": "grounds",
-  "anchor_document_ids": []
+  "anchor_document_ids": [],
+  "document_scope": "all"
 }

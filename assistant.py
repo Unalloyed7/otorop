@@ -43,7 +43,10 @@ INTENT_PROMPT = BOUNDARY + """
 не отвечай по существу. Сохрани ранее указанные договор, точное название контрагента,
 дату и её смысл. Новые явно названные обстоятельства заменяют старые.
 Альфа-Трейд и Альфа-Трейдинг — разные организации. Не исправляй и не сокращай названия.
-Если сказано только «Альфа» и договор неизвестен, action=clarify.
+Если сказано только сокращённое имя, сохрани его в filters.counterparty: поиск
+проверит неоднозначность. Недостающий номер договора не мешает поиску по контрагенту.
+Вопрос о внутреннем порядке ищи в регламентах, вопрос о законе — в законах.
+Не проси пользователя предоставить документ, пока база не проверена.
 Если предмет уточнения ясен из истории, не требуй повторить номер договора.
 filters.counterparty заполняй только точным названием организации, явно названным
 пользователем. Описания вроде «иностранная компания», «российский контрагент»,
@@ -56,6 +59,12 @@ query — самодостаточный поисковый запрос для 
 ПТ-05/2023 допускается ли предоплата и где указан её размер?» parts — это вопрос
 о допустимости предоплаты и вопрос о способе определения её размера, а не «пункт 4.2»
 или «договор поставки». filters.document_id оставляй null, если ID неизвестен.
+scope: contract — условия конкретного договора; policy — внутренний порядок,
+согласование, архив, комплаенс; law — законодательство; mixed — сочетание областей.
+filters.counterparty — только реальное имя внешнего контрагента. Свою организацию,
+должность и описания «иностранная компания»/«российский контрагент» туда не записывай.
+Не делай отдельными parts инструкции о формате, просьбу задать уточнение или
+сообщить об отсутствии сведений: parts содержат предметные юридические вопросы.
 Дату не угадывай. date_kind: specification_signed — дата подписания спецификации;
 contract_signed — договора; delivery — поставки; event — иного события с ясным смыслом.
 Для отсутствующей даты event_date=null и date_kind=null. as_of — явно переданная дата
@@ -154,6 +163,21 @@ allowed_claim_indices. Не возвращай номер пункта доку�
 неизвестных условиях недопустим. В missing_info перечисли оставшиеся без ответа parts
 и недостающие обстоятельства/документы; не добавляй собственных юридических знаний.
 Не переписывай выводы. Самопроверка может ошибаться: при сомнении исключи claim.
+Обязательно заполни coverage для КАЖДОГО parts с part_index от нуля.
+Проверяй не только истинность claims, но и ответ на исходный вопрос. Для complete
+нужны claim_indices подтверждённых выводов, которые раскрывают всю часть вопроса.
+Исключение или возможность выбрать другой порядок без основного правила — partial.
+Если запрошена ставка, сумма или срок, ответ должен назвать запрошенное значение
+и существенные условия. Например, перечисление альтернативных режимов не отвечает
+на вопрос об общей ставке. Не считай addresses генератора доказательством полноты.
+Если нужная информация уже есть в evidence, поставь evidence_available=true и
+назови пропущенный факт в coverage.missing_info: программа дополнит ответ.
+Если нужны новые источники/обстоятельства, evidence_available=false. Не объявляй
+пробелом не запрошенное пользователем факультативное пояснение.
+Если для применения правила неизвестен факт пользователя, поставь
+needs_clarification=true, evidence_available=false и укажи точный вопрос в missing_info.
+Наличие условного правила в источнике не означает, что неизвестный факт можно
+найти в evidence. Не повторяй один пробел одновременно в общем missing_info и coverage.
 """
 
 _RENEWAL_NOTE = """
@@ -165,9 +189,11 @@ metadata.renewal.status=unknown: договор предусматривает �
 DRAFT_PROMPT += _RENEWAL_NOTE
 VERIFY_PROMPT += _RENEWAL_NOTE
 DRAFT_PROMPT += """
-Для каждого claim заполни subject, rule (duty/permission/restriction/information),
-value как объект RuleValue, не null; сумму или срок заполни с единицей, calendar/working
-и counted_from — событием отсчёта. Если числового значения нет, используй пустой объект.
+Основной ответ дай прямо в claim.text; не заменяй его перечислением исключений.
+Не генерируй пустые необязательные поля. Если они существенны для вывода, заполни
+subject, rule (duty/permission/restriction/information), value как объект RuleValue,
+не null: сумму или срок с единицей, calendar/working и counted_from — событие отсчёта.
+Если числового значения нет, опусти value или используй пустой объект.
 conditions содержат текст, key/expected для явно известных обстоятельств и supports.
 limitations — ссылки на исключения, другие редакции, допсоглашения и дополняющий порядок.
 Не подменяй период действия нормы интервалом пользовательской даты. При изменении
@@ -175,6 +201,8 @@ limitations — ссылки на исключения, другие редак�
 одинаковое правило во всём интервале. Все четыре даты имеют разный смысл.
 metadata.temporal_status=not_applicable запрещает использовать фрагмент как
 действующее основание; его можно выбрать в limitations для сравнения редакций.
+Пояснение о начале/окончании другой редакции также цитируй в limitations, а
+не supports действующего вывода. Для исторического вывода выбери подходящую редакцию.
 metadata.applicability_status=varies означает смену условия внутри периода и требует уточнения.
 """
 VERIFY_PROMPT += """
@@ -254,6 +282,56 @@ def _quote_span(text: str, quote: str) -> tuple[int, int]:
     if match is None:
         raise CitationError("Нет точной цитаты")
     return match.span()
+
+
+def _recover_quote(text: str, quote: str) -> str | None:
+    """Find a unique source span for an elided list/formatting; never invent text.
+
+    Every quoted word and number must occur in order. The recovered source span
+    still has to pass the mechanical and semantic checks, including conditions.
+    """
+    words = list(re.finditer(r"\w+(?:[.,]\d+)*", text))
+    wanted = re.findall(r"\w+(?:[.,]\d+)*", quote)
+    if len(wanted) < 6:
+        return None
+    limit = min(2400, max(800, len(quote) * 3))
+    spans = []
+    for start, word in enumerate(words):
+        if word.group() != wanted[0]:
+            continue
+        position = start
+        for token in wanted[1:]:
+            position += 1
+            while position < len(words) and words[position].group() != token:
+                position += 1
+            if position == len(words) or words[position].end() - word.start() > limit:
+                break
+        else:
+            spans.append((word.start(), words[position].end()))
+    if not spans:
+        return None
+    shortest = min(end - start for start, end in spans)
+    candidates = {text[start:end] for start, end in spans if end - start == shortest}
+    return candidates.pop() if len(candidates) == 1 else None
+
+
+def _recover_claim_quotes(claim: Claim, evidence: list[Evidence]) -> Claim:
+    by_id = {e.chunk_id: e for e in evidence}
+    def recover(support):
+        source = by_id.get(support.chunk_id)
+        if source is None or source.document_id != support.document_id:
+            return support
+        try:
+            _quote_span(source.text, support.quote)
+            return support
+        except CitationError:
+            quote = _recover_quote(source.text, support.quote)
+            return support.model_copy(update={"quote": quote}) if quote else support
+    return claim.model_copy(update={
+        "supports": [recover(s) for s in claim.supports],
+        "limitations": [recover(s) for s in claim.limitations],
+        "conditions": [c.model_copy(update={"supports": [recover(s) for s in c.supports]}) for c in claim.conditions],
+    })
 
 
 def _instruction_overlap(text: str, start: int, end: int) -> bool:
@@ -441,7 +519,12 @@ def _claim_fact_key(claim: Claim) -> str | None:
 
 
 def _response(claims: list[Claim], gaps: list[str], evidence: list[Evidence], filters: SearchFilters, intent: Intent, reference: date, *, clarify=False) -> Answer:
-    gaps = list(dict.fromkeys(str(g).strip()[:350] for g in gaps if str(g).strip()))
+    unique = {}
+    for gap in gaps:
+        text = " ".join(str(gap).split()).rstrip(" .;:")[:350]
+        if text:
+            unique.setdefault(text.casefold(), text)
+    gaps = list(unique.values())
     if not claims:
         missing = gaps or intent.parts
         prefix = "Для ответа нужно уточнить: " if clarify else "Найденных применимых оснований недостаточно. Не хватает: "
@@ -481,6 +564,9 @@ class LegalAssistant:
         except BudgetExhausted:
             _record(trace, "error", kind="BudgetExhausted", message="request verification budget")
             result = Answer(status="error", text="Исчерпан бюджет проверки ответа. Основания не проверены полностью.")
+        except ModelProtocolError as exc:
+            _record(trace, "error", kind=type(exc).__name__, message="model output protocol")
+            result = Answer(status="error", text="Не удалось проверить структуру ответа модели. Это технический сбой проверки, а не отсутствие оснований в базе.")
         except (ModelAPIError, TimeoutError) as exc:
             _record(trace, "error", kind=type(exc).__name__, message="API/timeout")
             logger.warning("answer: техническая ошибка API или тайм-аут")
@@ -526,8 +612,23 @@ class LegalAssistant:
                 error = "Индексы утверждений должны быть уникальными и принадлежать диапазону 0.." + str(count-1)
             elif verdict.checks and set(indices) != set(range(count)):
                 error = "Нужен один checks для каждого из индексов: " + str(list(range(count)))
+            else:
+                coverage = {c.part_index: c for c in verdict.coverage}
+                if len(coverage) != len(verdict.coverage) or set(coverage) != set(range(len(data["parts"]))):
+                    error = "Нужен один coverage для каждой части вопроса с part_index от нуля"
+                else:
+                    selected = {c.index for c in verdict.checks if c.status in {"confirmed", "conditional"}} if verdict.checks else set(verdict.supported)
+                    for part, c in coverage.items():
+                        if len(c.claim_indices) != len(set(c.claim_indices)) or any(i not in selected for i in c.claim_indices):
+                            error = "coverage.claim_indices должны указывать подтверждённые выводы"
+                        if c.status == "complete" and not c.claim_indices:
+                            error = "Полная часть вопроса требует подтверждённых выводов"
             if error is None:
-                return verdict
+                return verdict.model_copy(update={"coverage": [
+                    c.model_copy(update={"status": "partial"})
+                    if c.status == "complete" and (c.needs_clarification or c.missing_info)
+                    else c for c in verdict.coverage
+                ]})
             if attempt or not current_control().repair():
                 raise ModelProtocolError("verify: " + error)
             try:
@@ -538,8 +639,13 @@ class LegalAssistant:
     async def _checked(self, candidate: list[Claim], evidence, filters, intent, reference, data, trace, *, allow_repair=True):
         valid, dropped = [], set()
         invalid, failures = [], []
+        revision_parts = []
         control = current_control()
         for index, claim in enumerate(candidate):
+            recovered = _recover_claim_quotes(claim, evidence)
+            if recovered != claim:
+                _record(trace, "quote_recovery", index=index, reason="source span; semantic check still required")
+            claim = recovered
             try:
                 citations = validate_supports(Draft(status="answer", claims=[claim]), evidence, filters, intent.parts, temporal_mode=intent.temporal_mode, reference=reference)
                 # Семантическая проверка и итоговый ответ используют исходный текст,
@@ -570,7 +676,30 @@ class LegalAssistant:
             if verdict.checks and (len(checks) != len(verdict.checks) or set(checks) != set(range(len(valid)))):
                 raise ModelProtocolError("verify: нужен один результат для каждого утверждения")
             for i, claim in enumerate(valid):
+                # The verifier can correct the drafter's part assignment.
+                addressed = {p.part_index for p in verdict.coverage if i in p.claim_indices}
+                claim = claim.model_copy(update={"addresses": sorted(set(claim.addresses) | addressed)})
+                valid[i] = claim
                 semantic = checks.get(i) or SemanticCheck(index=i, status="confirmed" if i in selected else "insufficient", reasons=[] if i in selected else ["Модель не подтвердила вывод"])
+                auxiliary = claim.model_copy(update={"supports": [], "conditions": [], "limitations": semantic.limitations})
+                recovered = _recover_claim_quotes(auxiliary, evidence).limitations
+                primary = {(s.document_id, s.chunk_id) for s in claim.supports}
+                by_id = {e.chunk_id: e for e in evidence}
+                canonical = []
+                for support in recovered:
+                    e = by_id.get(support.chunk_id)
+                    if e and e.document_id == support.document_id:
+                        try:
+                            _quote_span(e.text, support.quote)
+                        except CitationError:
+                            # A redundant verifier reference may quote an absent
+                            # list heading. Use the real primary source fragment,
+                            # never model-created text or another document.
+                            if (support.document_id, support.chunk_id) in primary and not _instruction_overlap(e.text, 0, len(e.text)):
+                                support = support.model_copy(update={"quote": e.text})
+                                _record(trace, "auxiliary_quote_recovery", index=i, chunk_id=e.chunk_id)
+                    canonical.append(support)
+                semantic = semantic.model_copy(update={"limitations": canonical})
                 try:
                     citations = validate_supports(Draft(status="answer", claims=[claim]), evidence, filters, intent.parts, temporal_mode=intent.temporal_mode, reference=reference)
                     statement = build_statement(claim, evidence, filters, citations=citations, semantic=semantic)
@@ -593,19 +722,26 @@ class LegalAssistant:
                     _record(trace, "rejected_claim", index=i, reason="semantic verifier", addresses=claim.addresses)
             valid = [c for i, c in enumerate(valid) if i in selected]
             gaps += verdict.missing_info
+            if control:
+                control.incomplete_parts = [c.part_index for c in verdict.coverage if c.status != "complete"]
+                control.clarification_needed = any(c.needs_clarification for c in verdict.coverage)
+            for part in verdict.coverage:
+                if part.status != "complete":
+                    gaps += part.missing_info or [intent.parts[part.part_index]]
+                    if part.evidence_available and not part.needs_clarification:
+                        revision_parts.append(intent.parts[part.part_index])
         elif valid:
             for claim in valid:
                 if control:
                     control.statements[statement_key(claim)] = build_statement(claim, evidence, filters, citations=linked_citations(claim.supports, evidence, role="support"))
             gaps.append("Смысловая проверка отключена; выводы проверены только формально")
-        repairable = any(any(term in reason for term in ("Подмена документа", "Нет точной цитаты", "Несуществующая часть", "Несуществующий источник")) for reason in failures)
-        if allow_repair and invalid and repairable and control and control.repair():
+        repairable = any(any(term in reason for term in ("Подмена документа", "Нет точной цитаты", "Несуществующая часть", "Несуществующий источник", "Редакция регламента", "Дата периода утверждения")) for reason in failures)
+        if allow_repair and ((invalid and repairable) or revision_parts) and control and control.max_models - control.models >= 2 and control.repair():
             try:
-                fixed = await self._structured(DRAFT_PROMPT, {**data, "previous_claims": [c.model_dump() for c in valid], "repair": {"errors": failures, "invalid_claims": [c.model_dump() for c in invalid], "instruction": "Исправь только неподтверждённые ссылки и структуру, сохрани юридические условия. Верни только исправленные claims."}}, Draft)
-                repaired, still_dropped, repair_gaps = await self._checked(fixed.claims, evidence, filters, intent, reference, data, trace, allow_repair=False)
-                valid += repaired
-                dropped = (dropped - {p for c in repaired for p in c.addresses}) | still_dropped
-                gaps += repair_gaps
+                fixed = await self._structured(DRAFT_PROMPT, {**data, "previous_claims": [c.model_dump() for c in valid], "repair": {"errors": failures, "incomplete_parts": revision_parts, "invalid_claims": [c.model_dump() for c in invalid], "instruction": "Исправь ссылки и дополни пропущенный ответ по evidence. Сохрани условия и ранее подтверждённые выводы. Верни только новые или исправленные claims."}}, Draft)
+                combined = list({_claim_key(c): c for c in [*valid, *fixed.claims]}.values())[:10]
+                repaired, still_dropped, repair_gaps = await self._checked(combined, evidence, filters, intent, reference, data, trace, allow_repair=False)
+                return repaired, (dropped | still_dropped) - {p for c in repaired for p in c.addresses}, repair_gaps
             except (ModelAPIError, BudgetExhausted, ValueError, AssertionError):
                 gaps.append("Техническая ошибка исправления; ранее подтверждённые части сохранены")
         return valid, dropped, gaps
@@ -623,13 +759,18 @@ class LegalAssistant:
             return Answer(status="out_of_scope", text="Я помогаю с юридическими вопросами по предоставленной базе документов. Сформулируйте такой вопрос.")
         if intent.action == "refuse":
             return Answer(status="refuse", text="Не могу помочь совершить противоправное действие. Могу разобрать требования и правовые последствия по документам базы.")
+        clarification_hint = intent.clarification if intent.action == "clarify" else None
         if intent.action == "clarify":
-            question = intent.clarification or "Уточните договор, контрагента и дату рассматриваемого события."
-            return Answer(status="clarify", text=question, missing_info=[question])
+            clarification_hint = clarification_hint or "Уточните договор, контрагента и дату рассматриваемого события."
+            intent = intent.model_copy(update={"action": "search", "query": (intent.query + " " + history[-1].content)[:3000]})
+            _record(trace, "clarification_deferred", reason="search before asking for information")
         filters = intent.filters.model_copy(update={"purpose": "grounds", "anchor_document_ids": []})
         if _is_generic_counterparty(filters.counterparty):
             _record(trace, "intent_filter_sanitized", field="counterparty", reason="generic entity description")
             filters = filters.model_copy(update={"counterparty": None})
+        if intent.scope in {"policy", "law"}:
+            filters = filters.model_copy(update={"document_scope": intent.scope})
+            _record(trace, "normative_scope", scope=intent.scope, reason="document scope is independent of case entities")
         if scenario is not None:
             supplied = ScenarioDates.model_validate(scenario)
             merged = filters.scenario.model_copy(deep=True)
@@ -756,7 +897,15 @@ class LegalAssistant:
                 if evidence and novel:
                     handled.update(novel)
                     data = {**context, "parts": intent.parts, "query": query, "filters": filters.model_dump(mode="json"), "temporal_mode": mode_for(filters, intent.temporal_mode, reference), "evidence": [e.model_dump(mode="json") for e in context_evidence], "search_missing_info": found.missing_info, "unavailable_editions": list(dict.fromkeys(unavailable)), "previous_claims": [c.model_dump() for c in checked]}
-                    raw = await self._structured(DRAFT_PROMPT, data, Draft)
+                    if attempt and checked:
+                        # Check the existing answer against additional sources.
+                        # Regenerate only if the verifier finds a real omission.
+                        raw = Draft(status="answer")
+                    else:
+                        # Never spend the final slot generating unverifiable text.
+                        if control.max_models - control.models < (2 if self.verify else 1):
+                            raise BudgetExhausted("Недостаточно бюджета для генерации и проверки")
+                        raw = await self._structured(DRAFT_PROMPT, data, Draft)
                     previous_keys = {_claim_key(c) for c in checked}
                     fact_keys = {_claim_fact_key(c) for c in checked} - {None}
                     candidate = list(checked)
@@ -774,13 +923,14 @@ class LegalAssistant:
                     unresolved = (unresolved - repaired) | rejected
                     checked = validated
                     covered = {p for c in checked for p in c.addresses}
+                    covered -= set(current_control().incomplete_parts)
                     unresolved = (unresolved | rejected) - covered
                     gaps = found.missing_info + raw.missing_info + verdict_gaps
-                    gaps += [p for i, p in enumerate(intent.parts) if i not in covered]
-                    gaps += ["Проверяемое основание для: " + intent.parts[i] for i in sorted(unresolved)]
+                    gaps += [p for i, p in enumerate(intent.parts) if i not in covered and i not in control.incomplete_parts]
                     if raw.status != "answer" and not gaps:
                         gaps = ["Обстоятельства для окончательного вывода"]
                     date_clarification = any("Уточните дату" in r for s in current_control().statements.values() for r in s.check.reasons)
+                    date_clarification = date_clarification or control.clarification_needed
                     date_clarification = date_clarification or (not checked and any(c.status == "unknown" for s in current_control().statements.values() for c in s.conditions))
                     best = _response(checked, gaps, context_evidence, filters, intent, reference, clarify=raw.status == "clarify" or date_clarification)
                     _record(trace, "attempt_result", attempt=attempt, answer=best.model_dump(mode="json"))
@@ -800,6 +950,8 @@ class LegalAssistant:
                 raise
         if checked and not current_control().limitation_search_done:
             return _response(checked, (best.missing_info if best else []) + ["Дополнительный поиск ограничений не выполнен"], context_evidence, filters, intent, reference)
+        if not checked and not collected and clarification_hint:
+            return Answer(status="clarify", text=clarification_hint, missing_info=[clarification_hint])
         return best or _response([], intent.parts, [], filters, intent, reference)
 
 

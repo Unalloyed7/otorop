@@ -64,4 +64,5 @@ async def test_partial_counterparty_returns_distinct_candidates_without_deciding
 
     assert result.clarification is None
     assert set(result.candidates) == {"Альфа-Трейд", "Альфа-Трейдинг"}
-    assert {item.counterparty for item in result.evidence} == {"Альфа-Трейд", "Альфа-Трейдинг"}
+    assert {item.counterparty for item in result.evidence if item.metadata["document_type"] in {"agreement", "amendment"}} == {"Альфа-Трейд", "Альфа-Трейдинг"}
+    assert all(item.counterparty in {None, "Альфа-Трейд", "Альфа-Трейдинг"} for item in result.evidence)

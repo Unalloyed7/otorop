@@ -6,7 +6,22 @@ import pytest
 from pydantic import SecretStr
 
 from llm_client import ModelAPIError, Settings
-from schemas import Applicability, Coordinates, Evidence, Intent, SearchResult
+from schemas import Applicability, Coordinates, Evidence, Intent, SearchResult, Verdict
+
+
+def with_coverage(response, data):
+    """Complete the default mock verdict; explicit coverage tests supply their own.
+
+    This is fixture data, not a semantic evaluator. Live quality is tested separately.
+    """
+    if "coverage" in response:
+        return response
+    selected = {c["index"] for c in response["checks"] if c["status"] in {"confirmed", "conditional"}} if response.get("checks") else set(response.get("supported", []))
+    coverage = []
+    for index, _ in enumerate(data.get("parts", [])):
+        claims = [i for i, c in enumerate(data.get("claims", [])) if i in selected and index in c["addresses"]]
+        coverage.append({"part_index": index, "status": "complete" if claims else "missing", "claim_indices": claims})
+    return {**response, "coverage": coverage}
 
 
 @pytest.fixture
@@ -41,6 +56,8 @@ class FakeClient:
         response = self.responses.popleft()
         if isinstance(response, Exception):
             raise response
+        if schema is Verdict and isinstance(response, dict):
+            response = with_coverage(response, data)
         return schema.model_validate(response)
 
 

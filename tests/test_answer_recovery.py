@@ -68,18 +68,22 @@ async def test_recovery_adds_new_claim_without_losing_verified_one(settings, evi
     plan = intent(filters=SearchFilters(contract_number="Т-1/2026")).model_copy(update={"parts": ["Оплата", "Гарантия"]})
     client = FakeClient(settings, plan,
         {"status": "partial", "claims": [claim(evidence)], "missing_info": ["Гарантийное условие"]}, {"supported": [0]},
+        {"supported": [0], "coverage": [
+            {"part_index": 0, "status": "complete", "claim_indices": [0]},
+            {"part_index": 1, "status": "missing", "evidence_available": True, "missing_info": ["Гарантия"]},
+        ]},
         {"status": "answer", "claims": [claim(extra, "Гарантийный срок составляет 24 месяца с даты поставки.", part=1)]}, {"supported": [0, 1]})
     trace = {}
     result = await LegalAssistant(search, client).answer("Оплата и гарантия?", trace=trace)
     assert result.status == "answer" and len(result.citations) == 2
     assert "30" in result.text and "24" in result.text and not result.missing_info
-    assert len(search.requests) == 2 and len(client.requests) == 5
+    assert len(search.requests) == 2 and len(client.requests) == 6
     assert search.requests[1][1]["purpose"] == "limitations"
     assert search.requests[1][1]["anchor_document_ids"] == [evidence.document_id]
     assert search.requests[0][1]["contract_number"] == search.requests[1][1]["contract_number"]
     assert search.requests[0][0] != search.requests[1][0]
     assert "Гарантия" in search.requests[1][0]
-    assert client.requests[3][1]["previous_claims"]
+    assert client.requests[4][1]["previous_claims"]
     assert len([s for s in trace["stages"] if s["stage"] == "search"]) == 2
 
 

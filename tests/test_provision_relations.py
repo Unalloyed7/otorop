@@ -79,6 +79,7 @@ async def test_search_bundle_keeps_rule_change_condition_and_exact_context_spans
     bundle = await backend.search_bundle(
         ["адрес доставки", "когда применяется новый адрес"],
         SearchFilters(
+            document_scope="contract",
             contract_number="П-17/2024",
             event_date="2024-10-02",
             date_kind="specification_signed",

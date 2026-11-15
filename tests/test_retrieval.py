@@ -62,7 +62,7 @@ class RetrievalTests(unittest.TestCase):
         self.assertEqual(trading[0]["contract_number"], "ПТ-05/2023")
         filtered = self.index.search(
             "гарантийный срок",
-            filters={"counterparty": "Альфа-Трейдинг"},
+            filters={"counterparty": "Альфа-Трейдинг", "document_scope": "contract"},
             top_k=10,
         )
         self.assertTrue(filtered)

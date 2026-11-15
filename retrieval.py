@@ -829,6 +829,9 @@ class SearchIndex:
             for party in filters.get("counterparty_candidates", [])
         }
         wanted_type = filters.get("document_type")
+        scope = filters.get("document_scope", "all")
+        if scope not in {"all", "contract", "policy", "law"}:
+            raise ValueError("Неизвестная область документов")
         wanted_document_id = filters.get("document_id")
         only_applicable = bool(filters.get("only_applicable", False))
         related_context_ids: set[str] = set()
@@ -844,6 +847,14 @@ class SearchIndex:
         scored: list[tuple[float, int]] = []
         for position, chunk in enumerate(self.chunks):
             document = self.documents[chunk["document_id"]]
+            document_type = document.get("document_type")
+            global_rule = document_type in {"law", "internal_policy", "letter"}
+            if scope == "contract" and document_type not in {"agreement", "amendment"}:
+                continue
+            if scope == "policy" and document_type not in {"internal_policy", "letter"}:
+                continue
+            if scope == "law" and document_type != "law":
+                continue
             if wanted_document_id and document["document_id"] != wanted_document_id:
                 continue
             if requested_contract:
@@ -851,7 +862,7 @@ class SearchIndex:
                 if document_contract and document_contract != requested_contract:
                     continue
                 document_type = document.get("document_type")
-                globally_applicable = document_type in {"law", "internal_policy"}
+                globally_applicable = global_rule
                 if (
                     not document_contract
                     and document["document_id"] not in related_context_ids
@@ -860,16 +871,12 @@ class SearchIndex:
                     continue
             if wanted_party:
                 parties = {_party_key(name) for name in document.get("counterparties", [])}
-                is_global_context = requested_contract and document.get("document_type") in {
-                    "law", "internal_policy", "letter"
-                }
+                is_global_context = global_rule
                 if (not parties or wanted_party not in parties) and not is_global_context:
                     continue
             if wanted_parties:
                 parties = {_party_key(name) for name in document.get("counterparties", [])}
-                is_global_context = requested_contract and document.get("document_type") in {
-                    "law", "internal_policy", "letter"
-                }
+                is_global_context = global_rule
                 if not parties.intersection(wanted_parties) and not is_global_context:
                     continue
             if wanted_type and document.get("document_type") != wanted_type:
@@ -884,7 +891,7 @@ class SearchIndex:
                 or (document.get("valid_to") and as_of >= document["valid_to"])
             ):
                 continue
-            if signed_date and document.get("signed_date") and document["signed_date"] != signed_date:
+            if signed_date and not global_rule and document.get("signed_date") and document["signed_date"] != signed_date:
                 continue
             if snapshot_date and document.get("snapshot_date") != snapshot_date:
                 continue
@@ -1241,6 +1248,9 @@ class SchemaSearchBackend:
 
         self._relation_lock = asyncio.Lock()
         self._embedding_lock = asyncio.Lock()
+        self.dense_timeout = float(os.environ.get("DENSE_SEARCH_TIMEOUT", "15"))
+        if not math.isfinite(self.dense_timeout) or self.dense_timeout <= 0:
+            raise ValueError("DENSE_SEARCH_TIMEOUT должен быть положительным числом секунд")
         self._document_vectors: dict[str, list[float]] | None = None
         self.diagnostics: list[str] = []
         self.embedding_status = "not_configured"
@@ -1563,10 +1573,15 @@ class SchemaSearchBackend:
             else dict(filters or {})
         )
         index_filters: dict[str, Any] = {}
+        index_filters["document_scope"] = filter_values.get("document_scope", "all")
         for key in ("contract_number", "counterparty", "document_id"):
             if filter_values.get(key):
                 index_filters[key] = filter_values[key]
         candidates: list[str] = []
+        resolution = {}
+        if index_filters.get("contract_number"):
+            number = _normalize_contract(str(index_filters["contract_number"]))
+            resolution["contract_number"] = "exact" if any(d.get("contract_number") == number for d in self.index.documents.values()) else "not_found"
         requested_party = index_filters.get("counterparty")
         if requested_party:
             parties = sorted({
@@ -1582,12 +1597,17 @@ class SchemaSearchBackend:
             ]
             if exact_parties:
                 index_filters["counterparty"] = exact_parties[0]
+                resolution["counterparty"] = "exact"
             elif len(near_parties) == 1:
                 index_filters["counterparty"] = near_parties[0]
+                resolution["counterparty"] = "unique_partial"
             elif len(near_parties) > 1:
+                resolution["counterparty"] = "ambiguous"
                 candidates = near_parties
                 index_filters.pop("counterparty")
                 index_filters["counterparty_candidates"] = near_parties
+            else:
+                resolution["counterparty"] = "not_found"
         event_date = filter_values.get("event_date")
         date_kind = filter_values.get("date_kind")
         if filter_values.get("scenario") and any(filter_values["scenario"].get(k) for k in ("contract_signed", "specification_signed", "delivery", "event")):
@@ -1679,7 +1699,10 @@ class SchemaSearchBackend:
         elif self.client is not None and self.client.settings.reranker_model and apply_reranker:
             self.reranker_status = "ready_not_needed"
 
-        return SearchResult(evidence=self._as_evidence(evidence_items), candidates=candidates)
+        converted = self._as_evidence(evidence_items)
+        for item in converted:
+            item.metadata["entity_resolution"] = resolution
+        return SearchResult(evidence=converted, candidates=candidates if index_filters["document_scope"] in {"all", "contract"} else [])
 
     def _as_evidence(self, evidence_items):
         from schemas import Applicability, Coordinates, Evidence
@@ -1952,16 +1975,17 @@ class SchemaSearchBackend:
         if in_cooldown:
             self.embedding_status = "cooldown"
         try:
-            return await self.search_with_mode(
-                query,
-                filters,
-                mode,
-                apply_reranker=(
-                    mode == "hybrid"
-                    and bool(self.client and self.client.settings.reranker_model)
-                ),
-            )
-        except ModelAPIError as exc:
+            async with asyncio.timeout(self.dense_timeout if mode == "hybrid" else None):
+                return await self.search_with_mode(
+                    query,
+                    filters,
+                    mode,
+                    apply_reranker=(
+                        mode == "hybrid"
+                        and bool(self.client and self.client.settings.reranker_model)
+                    ),
+                )
+        except (ModelAPIError, TimeoutError) as exc:
             if not configured_embeddings:
                 raise
             self._embedding_failures = min(self._embedding_failures + 1, 5)
@@ -1971,9 +1995,10 @@ class SchemaSearchBackend:
             )
             self._embedding_retry_after = time.monotonic() + retry_delay
             self.embedding_status = "disabled_after_error"
+            reason = "истёк бюджет гибридного поиска" if isinstance(exc, TimeoutError) else str(exc)
             diagnostic = (
                 f"embeddings недоступны; повтор через {retry_delay:g} с; "
-                f"текущий запрос продолжен через BM25: {exc}"
+                f"текущий запрос продолжен через BM25: {reason}"
             )
             self.diagnostics.append(diagnostic)
             logger.warning("retrieval: %s", diagnostic)

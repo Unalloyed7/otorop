@@ -99,6 +99,7 @@ class Evidence(Model):
 
 
 class SearchFilters(Model):
+    document_scope: Literal["all", "contract", "policy", "law"] = "all"
     contract_number: str | None = None
     counterparty: str | None = None
     document_id: str | None = None
@@ -310,12 +311,23 @@ class Intent(Model):
     filters: SearchFilters = Field(default_factory=SearchFilters)
     clarification: str | None = None
     temporal_mode: Literal["auto", "current", "historical", "future", "snapshot"] = "auto"
+    scope: Literal["contract", "policy", "law", "mixed"] = "mixed"
+
+
+class PartCoverage(Model):
+    part_index: StrictInt
+    status: Literal["complete", "partial", "missing"]
+    claim_indices: list[StrictInt] = Field(default_factory=list)
+    missing_info: list[str] = Field(default_factory=list)
+    evidence_available: bool = False
+    needs_clarification: bool = False
 
 
 class Verdict(Model):
     supported: list[StrictInt] = Field(default_factory=list)
     missing_info: list[str] = Field(default_factory=list)
     checks: list["SemanticCheck"] = Field(default_factory=list)
+    coverage: list[PartCoverage] = Field(default_factory=list)
 
 
 class SemanticCheck(Model):
