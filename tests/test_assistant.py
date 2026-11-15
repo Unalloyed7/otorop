@@ -65,6 +65,62 @@ async def test_history_and_contract_not_repeated(settings, evidence):
     assert client.requests[0][1]["history"] == history
 
 
+@pytest.mark.parametrize(
+    ("counterparty", "expected_filter"),
+    [
+        ("Иностранная компания", None),
+        ("Иностранный контрагент", None),
+        ("ООО «Меридиан»", "ООО «Меридиан»"),
+    ],
+)
+async def test_generic_counterparty_description_is_not_a_search_filter(
+    settings, evidence, counterparty, expected_filter
+):
+    plan = intent().model_copy(update={
+        "query": "условия договора с иностранной компанией",
+        "parts": ["проверка для иностранного контрагента"],
+        "filters": SearchFilters(counterparty=counterparty),
+    })
+    client = FakeClient(settings, plan, draft(evidence), {"supported": [0]})
+    search = FakeSearch([evidence])
+    trace = {}
+
+    result = await LegalAssistant(search, client).answer(
+        "Каковы условия договора с иностранной компанией?", trace=trace
+    )
+
+    assert result.status == "answer"
+    assert "иностранной компанией" in search.requests[0][0]
+    assert search.requests[0][1].counterparty == expected_filter
+    assert client.requests[1][1]["filters"]["counterparty"] == expected_filter
+    assert any(s["stage"] == "intent_filter_sanitized" for s in trace.get("stages", [])) is (expected_filter is None)
+
+
+async def test_paraphrased_claim_with_same_structured_fact_is_deduplicated(settings, evidence):
+    first = draft(evidence)["claims"][0]
+    first["text"] = "Арендная плата составляет 450 000 рублей в месяц."
+    first["value"] = {"amount": "450000", "currency": "RUB"}
+    duplicate = {**first, "text": "Размер платы — 450 000 рублей ежемесячно."}
+    different = {
+        **first,
+        "text": "Арендная плата составляет 500 000 рублей в месяц.",
+        "value": {"amount": "500000", "currency": "RUB"},
+    }
+    client = FakeClient(
+        settings,
+        intent(),
+        {"status": "answer", "claims": [first, duplicate, different]},
+        {"supported": [0, 1]},
+    )
+
+    result = await LegalAssistant(FakeSearch([evidence]), client).answer("Какова плата?")
+
+    assert result.status == "answer"
+    assert len(client.requests[2][1]["claims"]) == 2
+    assert result.text.count("450 000") == 1
+    assert result.text.count("500 000") == 1
+
+
 async def test_current_law_not_used_for_missing_historical_edition(settings, evidence):
     old = evidence.model_copy(deep=True)
     old.applicability.current_only = True

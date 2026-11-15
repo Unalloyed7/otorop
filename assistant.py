@@ -45,8 +45,17 @@ INTENT_PROMPT = BOUNDARY + """
 Альфа-Трейд и Альфа-Трейдинг — разные организации. Не исправляй и не сокращай названия.
 Если сказано только «Альфа» и договор неизвестен, action=clarify.
 Если предмет уточнения ясен из истории, не требуй повторить номер договора.
-query — самодостаточный поисковый запрос для последней реплики, parts — все её
-юридические подвопросы. filters.document_id оставляй null, если ID неизвестен.
+filters.counterparty заполняй только точным названием организации, явно названным
+пользователем. Описания вроде «иностранная компания», «российский контрагент»,
+«поставщик» или «арендатор» — категории, а не названия: оставь counterparty=null
+и сохрани категорию в query/parts, чтобы она не стала фильтром поиска.
+query — самодостаточный поисковый запрос для последней реплики, parts — только
+запрошенные юридические выводы. Не создавай отдельные parts для названий сторон,
+вида/номера договора, номера пункта, дат или упоминания прежнего ответа, если
+пользователь не спрашивает о них отдельно. Например, в «По пункту 4.2 договора
+ПТ-05/2023 допускается ли предоплата и где указан её размер?» parts — это вопрос
+о допустимости предоплаты и вопрос о способе определения её размера, а не «пункт 4.2»
+или «договор поставки». filters.document_id оставляй null, если ID неизвестен.
 Дату не угадывай. date_kind: specification_signed — дата подписания спецификации;
 contract_signed — договора; delivery — поставки; event — иного события с ясным смыслом.
 Для отсутствующей даты event_date=null и date_kind=null. as_of — явно переданная дата
@@ -77,6 +86,13 @@ DRAFT_PROMPT = BOUNDARY + """
 ограничения. Проверяй остальные переданные фрагменты на противоречия.
 Суммы, сроки, обязанности и выводы без подтверждения не включай. Не делай вычисления,
 которые нельзя проверить по точной цитате. Исправь ложные предпосылки.
+Покрой каждый parts: выведи все подтверждённые факты, прямо отвечающие на него.
+Если один claim отвечает на несколько parts, перечисли все их индексы в addresses.
+Не считай упоминание названия договора, стороны или номера пункта самостоятельным
+юридическим вопросом, если пользователь не просил отдельно идентифицировать его.
+Один уникальный вывод — один claim: не повторяй его другими словами; объединяй
+парафразы и выбирай наиболее полную формулировку. Не объединяй разные обязанности,
+условия или значения только потому, что они относятся к одному parts.
 Различай дату вступления допсоглашения в силу и дату события, к которому оно применяется.
 metadata.applicability_status=not_applicable запрещает применять изменение к событию;
 само условие можно процитировать для объяснения, почему изменение не применяется.
@@ -105,7 +121,9 @@ VERIFY_PROMPT = BOUNDARY + """
 применять изменение, unknown не доказывает выполнение условий.
 Верни в supported ВСЕ полностью подтверждённые claims; неподтверждённые не включай.
 Оцени каждый независимо, даже если несколько выводов отвечают на один подвопрос.
-Не выбирай только одну лучшую формулировку из нескольких правильных.
+Если несколько claims выражают один и тот же вывод, считай его один раз; не дублируй
+его в итоговом ответе. При этом проверяй независимо разные факты и условия даже тогда,
+когда они отвечают на один подвопрос.
 Индекс вывода — его claim_index, начиная с нуля; выбирай только значения из
 allowed_claim_indices. Не возвращай номер пункта документа, индекс parts/addresses
 или номер источника e1/e4. Если передан один claim с claim_index=0, supported
@@ -363,6 +381,65 @@ def _claim_key(claim: Claim) -> str:
     return claim.model_dump_json()
 
 
+def _is_generic_counterparty(value: str | None) -> bool:
+    if not value:
+        return False
+    normalized = value.casefold().replace("ё", "е")
+    normalized = re.sub(r"[«»\"'`.,:;]", " ", normalized)
+    normalized = re.sub(r"\b(?:ооо|зао|оао|пао|ао|ип|гуп|муп)\b", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return bool(re.fullmatch(
+        r"(?:(?:иностранн|зарубежн|российск|отечественн|местн|наш|этот|данн)\w*\s+)*"
+        r"(?:контрагент\w*|компан\w*|организац\w*|поставщик\w*|арендатор\w*|"
+        r"арендодатель\w*|покупатель\w*|продавец\w*|подрядчик\w*|заказчик\w*|"
+        r"работодатель\w*|сотрудник\w*|работник\w*)",
+        normalized,
+    ))
+
+
+def _claim_fact_key(claim: Claim) -> str | None:
+    value = claim.value
+    value_fields = {
+        "amount": value.amount,
+        "currency": value.currency,
+        "duration": value.duration,
+        "unit": value.unit,
+        "day_type": value.day_type if value.day_type != "unspecified" else None,
+        "counted_from": value.counted_from,
+        "action": value.action,
+    }
+    if not any(v is not None and v != "" for v in value_fields.values()):
+        return None
+    normalized_text = claim.text.casefold().replace("ё", "е")
+    normalized_text = re.sub(r"\bпротиворечит\b", "не соответствует", normalized_text)
+    numbers = sorted(re.findall(r"\d+(?:[.,]\d+)*", normalized_text))
+    markers = sorted(set(re.findall(
+        r"\b(?:не|нет|без|кроме|исключ\w*|включ\w*|только|после|до|если|при|"
+        r"может|должен|обязан|вправе)\w*\b",
+        normalized_text,
+    )))
+    conditions = [
+        (
+            re.sub(r"\s+", " ", c.text).strip().casefold(),
+            c.key,
+            c.expected,
+        )
+        for c in claim.conditions
+    ]
+    conditions.sort(key=lambda c: json.dumps(c, ensure_ascii=False, sort_keys=True, default=str))
+    identity = {
+        "addresses": sorted(set(claim.addresses)),
+        "subject": claim.subject.model_dump(exclude_none=True),
+        "rule": claim.rule,
+        "value": {k: v for k, v in value_fields.items() if v is not None and v != ""},
+        "numbers": numbers,
+        "markers": markers,
+        "conditions": conditions,
+        "period": claim.period.model_dump(mode="json", exclude_none=True) if claim.period else None,
+    }
+    return json.dumps(identity, ensure_ascii=False, sort_keys=True, default=str)
+
+
 def _response(claims: list[Claim], gaps: list[str], evidence: list[Evidence], filters: SearchFilters, intent: Intent, reference: date, *, clarify=False) -> Answer:
     gaps = list(dict.fromkeys(str(g).strip()[:350] for g in gaps if str(g).strip()))
     if not claims:
@@ -550,6 +627,9 @@ class LegalAssistant:
             question = intent.clarification or "Уточните договор, контрагента и дату рассматриваемого события."
             return Answer(status="clarify", text=question, missing_info=[question])
         filters = intent.filters.model_copy(update={"purpose": "grounds", "anchor_document_ids": []})
+        if _is_generic_counterparty(filters.counterparty):
+            _record(trace, "intent_filter_sanitized", field="counterparty", reason="generic entity description")
+            filters = filters.model_copy(update={"counterparty": None})
         if scenario is not None:
             supplied = ScenarioDates.model_validate(scenario)
             merged = filters.scenario.model_copy(deep=True)
@@ -678,12 +758,17 @@ class LegalAssistant:
                     data = {**context, "parts": intent.parts, "query": query, "filters": filters.model_dump(mode="json"), "temporal_mode": mode_for(filters, intent.temporal_mode, reference), "evidence": [e.model_dump(mode="json") for e in context_evidence], "search_missing_info": found.missing_info, "unavailable_editions": list(dict.fromkeys(unavailable)), "previous_claims": [c.model_dump() for c in checked]}
                     raw = await self._structured(DRAFT_PROMPT, data, Draft)
                     previous_keys = {_claim_key(c) for c in checked}
+                    fact_keys = {_claim_fact_key(c) for c in checked} - {None}
                     candidate = list(checked)
                     keys = set(previous_keys)
                     for claim in raw.claims:
-                        if _claim_key(claim) not in keys and len(candidate) < 10:
+                        fact_key = _claim_fact_key(claim)
+                        if (_claim_key(claim) not in keys and fact_key not in fact_keys
+                                and len(candidate) < 10):
                             candidate.append(claim)
                             keys.add(_claim_key(claim))
+                            if fact_key is not None:
+                                fact_keys.add(fact_key)
                     validated, rejected, verdict_gaps = await self._checked(candidate, context_evidence, filters, intent, reference, data, trace)
                     repaired = {p for c in validated if _claim_key(c) not in previous_keys for p in c.addresses}
                     unresolved = (unresolved - repaired) | rejected
