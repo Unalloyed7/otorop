@@ -218,12 +218,14 @@ class LLMClient:
             await asyncio.sleep(max(retry_after, min(4, 0.3 * 2**attempt) + random.uniform(0, 0.1)))
         raise AssertionError("Недостижимо")
 
-    async def chat(self, messages: list[dict[str, str]]) -> str:
+    async def chat(self, messages: list[dict[str, str]], *, response_format: dict | None = None) -> str:
         payload = {
             "model": self.settings.model, "messages": messages,
             "temperature": self.settings.temperature, "max_tokens": self.settings.max_tokens,
         }
-        if self.settings.json_mode:
+        if response_format is not None:
+            payload["response_format"] = response_format
+        elif self.settings.json_mode:
             payload["response_format"] = {"type": "json_object"}
         data = await self._post("/chat/completions", payload)
         try:
@@ -270,10 +272,20 @@ class LLMClient:
                 run["stages"].append({"stage": "model_context", "schema": schema.__name__, "before_chars": len(json.dumps(data, ensure_ascii=False)), "after_chars": len(json.dumps(wire_data, ensure_ascii=False)), "document_ids": document_ids, "chunk_ids": chunk_ids})
         system = instruction + "\nСхема результата:\n" + json.dumps(schema.model_json_schema(), ensure_ascii=False)
         system += "\nВерни экземпляр JSON-объекта с полями " + ", ".join(schema.model_fields) + ". Заполни его по данным. Не возвращай описание схемы, $defs или properties. Не добавляй текст вне JSON."
+        response_format = None
+        if self.settings.json_mode:
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema.__name__.lower(),
+                    "strict": True,
+                    "schema": schema.model_json_schema(),
+                },
+            }
         content = await self.chat([
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(wire_data, ensure_ascii=False)},
-        ])
+        ], response_format=response_format)
         run = active_run()
         event = {"schema": schema.__name__, "output": content, "valid": False}
         if run is not None:

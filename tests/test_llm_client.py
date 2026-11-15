@@ -44,6 +44,23 @@ async def test_json_mode_requests_json_object(settings):
     assert requests[0]["response_format"] == {"type": "json_object"}
 
 
+async def test_json_mode_constrains_structured_response_to_schema(settings):
+    requests = []
+
+    def handle(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"action":"search","query":"q","parts":["q"]}'}}]})
+
+    async with LLMClient(settings.model_copy(update={"json_mode": True}), transport=httpx.MockTransport(handle)) as client:
+        result = await client.structured("JSON", {}, Intent)
+
+    assert result.action == "search"
+    response_format = requests[0]["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["name"] == "intent"
+    assert response_format["json_schema"]["schema"] == Intent.model_json_schema()
+
+
 @pytest.mark.parametrize("status,retry", [(429, True), (503, True), (401, False), (400, False)])
 async def test_bounded_retries_and_safe_diagnostics(settings, monkeypatch, status, retry):
     monkeypatch.setattr("llm_client.asyncio.sleep", lambda _: _immediate())
