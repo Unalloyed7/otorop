@@ -175,7 +175,10 @@ async def run_submission(data_dir: Path, output: Path = Path("submission.csv"), 
             if type(override) is bool:
                 settings = settings.model_copy(update={"verify": override})
             # Регламент гарантирует запись в рабочий каталог и /tmp, не в HOME.
-            for setting, directory in (("OTOROP_EMBEDDING_CACHE_DIR", "embeddings"), ("OTOROP_KNOWLEDGE_CACHE_DIR", "knowledge")):
+            for setting, directory in (
+                ("OTOROP_EMBEDDING_CACHE_DIR", "embeddings"),
+                ("OTOROP_KNOWLEDGE_CACHE_DIR", "knowledge"),
+            ):
                 if not env_value(setting):
                     os.environ[setting] = str(Path(tempfile.gettempdir()) / "otorop" / directory)
             client = LLMClient(settings)

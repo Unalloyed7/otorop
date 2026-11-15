@@ -221,12 +221,15 @@ async def test_general_rule_exception_amendment_conditional_result(settings, evi
 
 
 @pytest.mark.parametrize("field,value", [("duration", "90"), ("day_type", "working")])
-async def test_structured_value_is_checked_by_code_even_when_text_is_correct(settings, evidence, field, value):
+async def test_structured_value_is_sent_to_semantic_verifier(settings, evidence, field, value):
     response = draft(evidence)
     response["claims"][0]["value"] = {field: value}
-    answer = await LegalAssistant(FakeSearch([evidence]), FakeClient(settings, intent(), response)).answer("Срок?")
+    client = FakeClient(settings, intent(), response, {"supported": []})
+    answer = await LegalAssistant(FakeSearch([evidence]), client).answer("Срок?")
     assert answer.status == "insufficient" and not answer.citations
-    assert not answer.statements[0].check.mechanical_pass
+    assert answer.statements[0].check.mechanical_pass
+    assert answer.statements[0].check.status == "insufficient"
+    assert client.requests[2][1]["claims"][0]["value"][field] == value
 
 
 async def test_format_repair_is_per_request_not_shared_across_concurrent_answers(settings, evidence):

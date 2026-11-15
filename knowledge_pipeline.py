@@ -20,19 +20,22 @@ from documents import PROCESSOR_VERSION, split_document
 
 PIPELINE_VERSION = "knowledge-pipeline-v1"
 STRUCTURE_VERSION = "structure-v1"
-ENTITY_VERSION = "entities-refs-v1"
-CANDIDATE_VERSION = "relation-candidates-v2"
+ENTITY_VERSION = "entities-refs-v2"
+CANDIDATE_VERSION = "relation-candidates-v3"
 VALIDATION_VERSION = "evidence-validation-v1"
-RESOLUTION_VERSION = "target-resolution-v1"
-GRAPH_VERSION = "knowledge-graph-v3"
+RESOLUTION_VERSION = "target-resolution-v2"
+GRAPH_VERSION = "knowledge-graph-v4"
 SEARCH_INDEX_VERSION = "search-index-v1"
-LLM_PROMPT_VERSION = "relation-extraction-prompt-v1"
-RELATION_REVIEW_VERSION = "relation-semantic-review-v1"
+LLM_PROMPT_VERSION = "relation-extraction-prompt-v2"
+RELATION_REVIEW_VERSION = "relation-semantic-review-v2"
+
 
 _NUMBER = r"\d+(?:\.\d+)*"
 _REFERENCE_LABEL = re.compile(
-    r"(?P<label>пункты|пунктов|пункт|пп\.|п\.|статьи|статья|ст\.|"
-    r"подпункты|подпункт|подп\.|части|часть|ч\.|разделы|раздел)\s*",
+    r"(?P<label>пункт(?:ами|ов|ом|ах|ам|ы|а|е|у)?|пп\.|п\.|"
+    r"стать(?:ями|ях|ям|ей|ёй|ю|я|и|е)|ст\.|"
+    r"подпункт(?:ами|ов|ом|ах|ам|ы|а|е|у)?|подп\.|"
+    r"част(?:ями|ях|ям|ью|ей|и|ь)|ч\.|раздел(?:ами|ов|ом|ах|ам|ы|а|е|у)?)\s*",
     re.IGNORECASE,
 )
 _REFERENCE_ITEM = re.compile(
@@ -223,6 +226,30 @@ def validate_relation_semantics(relation: dict[str, Any], index: Any) -> dict[st
     }
 
 
+def relation_is_rejected(relation: dict[str, Any]) -> bool:
+    validation = relation.get("semantic_validation", {})
+    return (
+        validation.get("status") == "contradicted"
+        or validation.get("model_review", {}).get("status") == "contradicted"
+        or relation.get("checks", {}).get("relation_type") == "contradicted"
+        or relation.get("type_status") == "requires_review"
+    )
+
+
+def relation_can_cover(relation: dict[str, Any]) -> bool:
+    """A candidate may supply context without proving its asserted edge type."""
+    if relation_is_rejected(relation):
+        return False
+    validation = relation.get("semantic_validation", {})
+    review = validation.get("model_review", {}).get("status")
+    if review is not None:
+        return review == "supported"
+    return relation.get("confidence") == "explicit" and (
+        validation.get("status") == "supported_by_surface_cues"
+        or (not validation and relation.get("confidence") == "explicit")
+    )
+
+
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -303,6 +330,68 @@ def extract_references(text: str, absolute_start: int = 0) -> list[dict[str, Any
         key = (reference["start_char"], reference["end_char"], reference["reference"])
         unique_references.setdefault(key, reference)
     return list(unique_references.values())
+
+
+_LAW_ALIASES = (
+    (r"(?:трудового\s+кодекса(?:\s+РФ)?|ТК\s*РФ)", r"(?:тк|трудов)", "ТК РФ"),
+    (r"(?:налогового\s+кодекса(?:\s+РФ)?|НК\s*РФ)", r"(?:нк|налогов)", "НК РФ"),
+    (r"КоАП(?:\s*РФ)?", r"коап", "КоАП РФ"),
+    (r"(?:152[\s-]*ФЗ|закона\s+о\s+персональных\s+данных)", r"(?:152[\s-]*фз|персональных)", "152-ФЗ"),
+)
+
+
+def reference_document_hint(text: str, reference: str, *, end: int | None = None) -> str | None:
+    """Read the document qualifier attached to a reference, without guessing."""
+    if end is None:
+        mention = next((r for r in extract_references(text) if r["reference"] == reference), None)
+        if mention is None:
+            return None
+        end = mention["end_char"]
+    suffix = text[end:end + 180]
+    contract = _CONTRACT.search(suffix)
+    if contract and re.fullmatch(
+        r"\s*договор[а-яё]*\s*(?:(?:поставки|аренды|оказания\s+услуг)\s*)?№?\s*",
+        suffix[:contract.start()], re.I,
+    ):
+        return "Договор № " + contract[1]
+    for alias, _, canonical in _LAW_ALIASES:
+        if re.match(r"\s*" + alias + r"\b", suffix, re.I):
+            return canonical
+    return None
+
+
+def matching_document_ids(index: Any, descriptor: str) -> set[str]:
+    """An explicit descriptor restricts the scope; an absent target stays absent."""
+    def normalized(value: str) -> str:
+        return re.sub(r"\s+", "", value).casefold().replace("ё", "е").replace("–", "-").replace("—", "-")
+
+    wanted = normalized(descriptor)
+    exact = {
+        doc_id for doc_id, doc in index.documents.items()
+        if wanted in {normalized(str(doc.get("title") or "")), normalized(doc["source_file"])}
+    }
+    if exact:
+        return exact
+    contract = _CONTRACT.search(descriptor)
+    if contract:
+        kind = "amendment" if re.search(r"дополнительн\w+\s+соглашени", descriptor, re.I) else "agreement"
+        return {
+            doc_id for doc_id, doc in index.documents.items()
+            if normalized(str(doc.get("contract_number") or "")) == normalized(contract[1])
+            and doc.get("document_type") == kind
+        }
+    for alias, filename, canonical in _LAW_ALIASES:
+        if wanted == normalized(canonical) or re.fullmatch(alias, descriptor.strip(), re.I):
+            return {
+                doc_id for doc_id, doc in index.documents.items()
+                if doc.get("document_type") == "law" and re.search(filename, doc["source_file"], re.I)
+            }
+    return set()
+
+
+def reference_document_scope(index: Any, text: str, reference: str, fallback: set[str]) -> set[str]:
+    hint = reference_document_hint(text, reference)
+    return matching_document_ids(index, hint) if hint else fallback
 
 
 def _document_entities(document: dict[str, Any]) -> list[dict[str, Any]]:
@@ -400,7 +489,10 @@ def _extract_candidates(
                 "source_chunk_id": chunk["chunk_id"],
                 "relation_type": relation_type,
                 "target_reference": reference["reference"],
-                "target_document": None,
+                "target_document": reference_document_hint(
+                    chunk["text"], reference["reference"],
+                    end=reference["end_char"] - chunk["start_char"],
+                ),
                 "quote": quote,
                 "start_char": start_char,
                 "end_char": end_char,
@@ -883,6 +975,7 @@ class KnowledgePipeline:
         payload = {
             "relations": index.provision_relations,
             "gaps": index.provision_gaps,
+            "llm_report": index.pipeline_diagnostics.get("llm_relations"),
             "chunk_state": {
                 chunk["chunk_id"]: {
                     "local_conditions": chunk.get("local_conditions", []),
@@ -904,22 +997,14 @@ class KnowledgePipeline:
         base_graph_fingerprint: str,
         model: str,
         max_chunks: int,
+        endpoint: str = "",
     ) -> str:
-        selected = [
-            chunk for chunk in chunks
-            if _CONDITION.search(chunk["text"])
-            or _ACTION.search(chunk["text"])
-            or _EXCEPTION.search(chunk["text"])
-            or _CONFLICT.search(chunk["text"])
-            or extract_references(chunk["text"])
-        ][:max_chunks]
+        # A completed graph describes the whole corpus, independently of the
+        # batch size used to reach it. Older limited snapshots cannot match.
         return _sha(_json([
-            base_graph_fingerprint,
-            GRAPH_VERSION,
-            LLM_PROMPT_VERSION,
-            model,
-            max_chunks,
-            [(chunk["chunk_id"], chunk.get("content_sha256"), chunk["text"]) for chunk in selected],
+            base_graph_fingerprint, GRAPH_VERSION, LLM_PROMPT_VERSION,
+            model, endpoint,
+            [(chunk["chunk_id"], chunk.get("content_sha256"), chunk["text"]) for chunk in chunks],
         ]))
 
     async def review_relation_types(
@@ -940,7 +1025,7 @@ class KnowledgePipeline:
                 item.get("semantic_validation", {}).get("status") == "uncertain",
                 item.get("relation_id", ""),
             ),
-        )[:max_relations]
+        )
         pending: list[tuple[dict[str, Any], dict[str, Any], str]] = []
         cached_count = 0
         for relation in relations:
@@ -959,6 +1044,7 @@ class KnowledgePipeline:
                 support_text,
                 RELATION_REVIEW_VERSION,
                 client.settings.model,
+                getattr(client.settings, "base_url", ""),
             ]))
             cached = self._get_stage(
                 "relation_reviews",
@@ -970,6 +1056,9 @@ class KnowledgePipeline:
             if cached is not None:
                 relation.setdefault("semantic_validation", {})["model_review"] = cached
                 cached_count += 1
+                continue
+            relation.setdefault("semantic_validation", {}).pop("model_review", None)
+            if len(pending) >= max_relations:
                 continue
             pending.append((relation, {
                 "relation_id": relation["relation_id"],
@@ -1030,10 +1119,15 @@ class KnowledgePipeline:
                     fingerprint,
                     review,
                 )
+        reviewed = cached_count + len(pending)
+        remaining = len(relations) - reviewed
         return {
-            "status": "complete",
+            "status": "complete" if not remaining else "partial",
             "model": client.settings.model,
-            "reviewed": len(relations),
+            "reviewed": reviewed,
+            "total_relations": len(relations),
+            "remaining_relations": remaining,
+            "coverage_complete": remaining == 0,
             "cached": cached_count,
             "requested": len(pending),
             "decisions": {
@@ -1053,31 +1147,40 @@ class KnowledgePipeline:
         *,
         max_chunks: int = 16,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        """Optional bounded extraction; never treats source text as instructions."""
-        selected = [
-            chunk for chunk in chunks
-            if _CONDITION.search(chunk["text"])
-            or _ACTION.search(chunk["text"])
-            or _EXCEPTION.search(chunk["text"])
-            or _CONFLICT.search(chunk["text"])
-            or extract_references(chunk["text"])
-        ][:max_chunks]
+        """Resume the whole corpus; budget new calls, not cached successes."""
+        if not 1 <= max_chunks <= 64:
+            raise ValueError("max_chunks должен быть от 1 до 64.")
         output: list[dict[str, Any]] = []
+        pending = []
         failures = []
-        for chunk in selected:
+        completed = 0
+        endpoint = str(getattr(client.settings, "base_url", ""))
+        model_key = _sha(_json([client.settings.model, endpoint]))
+        stage_version = LLM_PROMPT_VERSION + ":" + model_key
+        for position, chunk in enumerate(chunks):
             digest = chunk.get("content_sha256", "")
-            input_fingerprint = _sha(_json([
+            fingerprint = _sha(_json([
                 chunk["chunk_id"], chunk["text"], client.settings.model,
-                LLM_PROMPT_VERSION,
+                endpoint, LLM_PROMPT_VERSION,
             ]))
             cached = self._get_stage(
-                "llm_candidates", chunk["chunk_id"], digest,
-                LLM_PROMPT_VERSION + ":" + client.settings.model,
-                input_fingerprint,
+                "llm_candidates", chunk["chunk_id"], digest, stage_version, fingerprint,
             )
             if cached is not None:
                 output.extend(cached)
+                completed += 1
                 continue
+            row = self._connection.execute(
+                "SELECT updated_at FROM stage_records WHERE stage='llm_candidates' "
+                "AND object_id=? AND input_fingerprint=? AND status='failed'",
+                (chunk["chunk_id"], fingerprint),
+            ).fetchone()
+            # New work precedes retries, so a repeatedly failing early chunk
+            # cannot starve the rest. Failures themselves are retried oldest first.
+            pending.append((row["updated_at"] if row else "", position, chunk, fingerprint))
+        selected = sorted(pending, key=lambda job: (job[0], job[1]))[:max_chunks]
+        for _, _, chunk, fingerprint in selected:
+            digest = chunk.get("content_sha256", "")
             try:
                 response = await client.structured(
                     "Извлеки кандидатов юридических связей из текста фрагмента. "
@@ -1090,7 +1193,7 @@ class KnowledgePipeline:
                         "document_id": chunk["document_id"],
                         "chunk_id": chunk["chunk_id"],
                         "section_reference": chunk.get("section_reference"),
-                        "source_text": chunk["text"][:6000],
+                        "source_text": chunk["text"],
                     },
                     RelationExtraction,
                 )
@@ -1098,11 +1201,12 @@ class KnowledgePipeline:
                 for relation in response.relations:
                     quote_start = chunk["text"].find(relation.quote)
                     if quote_start < 0:
-                        continue
+                        raise ValueError("relation quote is absent from source")
                     start = chunk["start_char"] + quote_start
                     end = start + len(relation.quote)
+                    identity = [chunk["chunk_id"], relation.model_dump(), start, model_key]
                     items.append({
-                        "candidate_id": _sha(f"{chunk['chunk_id']}\0{relation.relation_type}\0{start}\0{relation.quote}")[:24],
+                        "candidate_id": _sha(_json(identity))[:24],
                         "source_chunk_id": chunk["chunk_id"],
                         "relation_type": relation.relation_type,
                         "target_reference": relation.target_reference,
@@ -1119,21 +1223,28 @@ class KnowledgePipeline:
                     })
                 self._put_stage(
                     "llm_candidates", chunk["chunk_id"], digest,
-                    LLM_PROMPT_VERSION + ":" + client.settings.model,
-                    input_fingerprint, items,
+                    stage_version, fingerprint, items,
                 )
                 output.extend(items)
+                completed += 1
             except Exception as exc:
-                message = f"{type(exc).__name__}: relation extraction unavailable"
+                message = f"{type(exc).__name__}: relation extraction unavailable or invalid"
                 failures.append({"chunk_id": chunk["chunk_id"], "error": message})
                 self._put_stage(
                     "llm_candidates", chunk["chunk_id"], digest,
-                    LLM_PROMPT_VERSION + ":" + client.settings.model,
-                    input_fingerprint, status="failed", error=message,
+                    stage_version, fingerprint, status="failed", error=message,
                 )
+        remaining = len(chunks) - completed
         return output, {
-            "status": "partial" if failures else "complete",
-            "candidate_chunks": len(selected),
+            "status": "partial" if remaining else "complete",
+            "coverage_complete": remaining == 0,
+            "total_chunks": len(chunks),
+            "completed_chunks": completed,
+            "remaining_chunks": remaining,
+            "candidate_chunks": len(chunks),
+            "attempted_chunks": len(selected),
+            "cached_chunks": completed - (len(selected) - len(failures)),
+            "budget_exhausted": len(pending) > len(selected),
             "relations": len(output),
             "failures": failures,
             "model": client.settings.model,
@@ -1283,44 +1394,30 @@ def resolve_candidates(index: Any, candidates: list[dict[str, Any]]) -> tuple[li
                 if target.get("document_type") == "agreement"
                 and target.get("contract_number") == contract
             }
-        target_document = candidate.get("target_document")
-        if target_document:
-            target_contract = re.sub(r"\s+", "", target_document).casefold()
-            eligible_document_ids.update(
-                doc_id for doc_id, doc in index.documents.items()
-                if (
-                    (
-                        re.sub(r"\s+", "", str(doc.get("contract_number") or "")).casefold() == target_contract
-                        and (
-                            candidate["relation_type"] not in {"amends", "replaces", "supplements", "repeals"}
-                            or doc.get("document_type") == "agreement"
-                        )
-                    )
-                    or re.sub(r"\s+", " ", str(doc.get("title") or "")).casefold()
-                    == re.sub(r"\s+", " ", target_document).casefold()
-                    or re.sub(r"\s+", " ", str(doc.get("source_file") or "")).casefold()
-                    == re.sub(r"\s+", " ", target_document).casefold()
-                )
-            )
-        if contract and candidate["relation_type"] in {"amends", "replaces", "supplements", "repeals"}:
-            eligible_document_ids.update(
-                doc_id for doc_id, doc in index.documents.items()
-                if doc.get("contract_number") == contract and doc.get("document_type") == "agreement"
-            )
-        source_text = source["text"].casefold()
-        legal_aliases = (
-            (r"\b(?:трудового\s+кодекса|тк\s*рф)\b", r"(?:тк|трудов)"),
-            (r"\b(?:налогового\s+кодекса|нк\s*рф)\b", r"(?:нк|налогов)"),
-            (r"\bкоап\b", r"коап"),
-            (r"\b(?:152[\s-]*фз|персональных\s+данных)\b", r"(?:152[\s-]*фз|персональных)"),
+        target_document = candidate.get("target_document") or reference_document_hint(
+            source["text"], str(target_reference)
         )
-        for alias, filename_pattern in legal_aliases:
-            if re.search(alias, source_text, re.I):
-                eligible_document_ids.update(
-                    doc_id for doc_id, target in index.documents.items()
-                    if target.get("document_type") == "law"
-                    and re.search(filename_pattern, str(target.get("source_file") or ""), re.I)
-                )
+        if target_document:
+            eligible_document_ids = matching_document_ids(index, target_document)
+            if not eligible_document_ids:
+                gaps.append({
+                    "kind": "referenced_document_not_found",
+                    "source_chunk_id": source["chunk_id"],
+                    "target_reference": target_reference,
+                    "target_document": target_document,
+                    "source_text": candidate["quote"],
+                    "message": f"Указанный документ {target_document} не найден; локальные пункты не подставлялись.",
+                    "candidate_id": candidate["candidate_id"],
+                })
+                continue
+        else:
+            for alias, filename_pattern, _ in _LAW_ALIASES:
+                if re.search(alias, source["text"], re.I):
+                    eligible_document_ids.update(
+                        doc_id for doc_id, target in index.documents.items()
+                        if target.get("document_type") == "law"
+                        and re.search(filename_pattern, target["source_file"], re.I)
+                    )
         targets = []
         normalized_target = re.sub(r"^статья\s+", "", str(target_reference), flags=re.I).rstrip(".")
         for doc_id in eligible_document_ids:
@@ -1399,18 +1496,29 @@ def resolve_candidates(index: Any, candidates: list[dict[str, Any]]) -> tuple[li
 
 
 def attach_relations(index: Any, relations: list[dict[str, Any]], gaps: list[dict[str, Any]]) -> None:
+    seen_relations = {relation["relation_id"] for relation in index.provision_relations}
     for relation in relations:
+        if relation["relation_id"] in seen_relations:
+            continue
+        seen_relations.add(relation["relation_id"])
         index.provision_relations.append(relation)
         for chunk_id in {relation["from_chunk_id"], relation["to_chunk_id"], *relation["supporting_chunk_ids"]}:
             chunk = index.get_chunk(chunk_id)
             chunk.setdefault("provision_relations", []).append(relation)
+    seen_gaps = {_json(gap) for gap in index.provision_gaps}
     for gap in gaps:
+        if _json(gap) in seen_gaps:
+            continue
+        seen_gaps.add(_json(gap))
         index.provision_gaps.append(gap)
         source_id = gap.get("source_chunk_id")
         if source_id in index._by_chunk_id:
             index.get_chunk(source_id).setdefault("provision_gaps", []).append(gap)
     for relation in index.provision_relations:
+        model_review = relation.get("semantic_validation", {}).get("model_review")
         relation["semantic_validation"] = validate_relation_semantics(relation, index)
+        if model_review is not None:
+            relation["semantic_validation"]["model_review"] = model_review
         relation.setdefault("checks", {})["relation_type"] = relation["semantic_validation"]["status"]
         if relation["semantic_validation"]["status"] == "contradicted":
             relation["type_status"] = "requires_review"

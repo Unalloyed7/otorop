@@ -5,8 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     DATA_DIR=/app/data \
     WEB_STATE_DIR=/state \
+    OTOROP_EMBEDDING_CACHE_DIR=/tmp/otorop/embeddings \
     OTOROP_KNOWLEDGE_CACHE_DIR=/state/knowledge \
-    OTOROP_EMBEDDING_CACHE_DIR=/tmp/otorop/embeddings
 WORKDIR /app
 COPY requirements.txt requirements-web.txt ./
 RUN pip install --no-cache-dir -r requirements-web.txt \

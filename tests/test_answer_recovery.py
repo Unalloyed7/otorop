@@ -56,6 +56,10 @@ async def test_invalid_first_claim_and_verifier_reindex(settings, evidence):
     assert "[1]" in answer.text and "[2]" not in answer.text
     assert answer.citations[0].claim_index == 0
     assert len(client.requests[2][1]["claims"]) == 1
+    verification = client.requests[2][1]
+    assert verification["allowed_claim_indices"] == [0]
+    assert verification["claims"][0]["claim_index"] == 0
+    assert verification["claims"][0]["addresses"] == [1]
 
 
 async def test_recovery_adds_new_claim_without_losing_verified_one(settings, evidence):
@@ -119,6 +123,16 @@ async def test_semantic_rejection_preserves_other_claim(settings, evidence):
     assert result.status == "partial"
     assert "24 месяца" in result.text and "30 календарных" not in result.text
     assert all(c.claim_index == 0 for c in result.citations)
+
+
+async def test_rejected_alternative_does_not_uncover_already_answered_part(settings, evidence):
+    client = FakeClient(settings, intent(),
+        {"status": "answer", "claims": [claim(evidence), claim(evidence, "Оплата — 90 дней.")]},
+        {"supported": [0], "missing_info": []})
+    result = await LegalAssistant(FakeSearch([evidence]), client).answer("Какой срок оплаты?")
+    assert result.status == "answer" and not result.missing_info
+    assert "30 календарных" in result.text and "90 дней" not in result.text
+    assert len(client.requests) == 3
 
 
 async def test_recovery_is_bounded_to_one_search(settings):
