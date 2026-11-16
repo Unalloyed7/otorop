@@ -323,11 +323,20 @@ class PartCoverage(Model):
     needs_clarification: bool = False
 
 
+class Clarification(Model):
+    question: str = Field(min_length=1, max_length=600,
+        description="Один короткий прямой вопрос пользователю, заканчивающийся знаком ?. Без правовых утверждений и вводных оборотов.",
+        json_schema_extra={"pattern": r"^[^?]+\?$"})
+    part_indices: list[StrictInt] = Field(min_length=1, max_length=10)
+
+
 class Verdict(Model):
+    answer_claim_indices: list[StrictInt]
     supported: list[StrictInt] = Field(default_factory=list)
     missing_info: list[str] = Field(default_factory=list)
     checks: list["SemanticCheck"] = Field(default_factory=list)
     coverage: list[PartCoverage] = Field(default_factory=list)
+    clarifications: list[Clarification] = Field(default_factory=list, max_length=10)
 
 
 class SemanticCheck(Model):
@@ -335,6 +344,10 @@ class SemanticCheck(Model):
     status: CheckStatus
     reasons: list[str] = Field(default_factory=list)
     limitations: list[Support] = Field(default_factory=list, max_length=12)
+    relevance: Literal["direct", "necessary", "unrequested"]
+    excluded_fragments: list[str]
+    duplicate_of: StrictInt | None = None
+    subsumes: StrictInt | None = None
 
 
 Verdict.model_rebuild()

@@ -46,26 +46,23 @@ def load_questions(path: Path) -> list[tuple[str, str]]:
 
 def render_answer(answer: Answer) -> str:
     # Номера [n] соответствуют индексам выводов; веб использует те же Citation.
-    references = []
-    for c in answer.citations:
-        reference = f'[{c.claim_index + 1}] {c.document_title}, {c.section} ({c.edition}). «{c.quote}»'
-        if reference not in references:
-            references.append(reference)
-    text = answer.text + ("\nОснования:\n" + "\n".join(references) if references else "")
-    if len(text) > 10000 and answer.citations:
-        # Full excerpts are available in the report/web. CSV only requires
-        # identifiable documents and provisions, not repeating entire articles.
-        compact = list(dict.fromkeys(
+    sources = list(answer.citations)
+    for i, statement in enumerate(s for s in answer.statements if s.published):
+        sources += [c.model_copy(update={"claim_index": i}) for c in statement.limitations]
+        sources += [c.model_copy(update={"claim_index": i}) for condition in statement.conditions for c in condition.citations]
+    # Keep precise references in the answer. Full excerpts remain in citations,
+    # statement cards and diagnostic reports, without repeating them in prose.
+    references = list(dict.fromkeys(
             f'[{c.claim_index + 1}] {c.document_title}, {c.section} ({c.edition}).'
-            for c in answer.citations
+            for c in sources
+    ))
+    text = answer.text + ("\nОснования:\n" + "\n".join(references) if references else "")
+    if len(text) > 10000 and sources:
+        compact = list(dict.fromkeys(
+                f'[{c.claim_index + 1}] {c.coordinates.source_path}, {c.section} ({c.edition}).'
+                for c in sources
         ))
         text = answer.text + "\nОснования:\n" + "\n".join(compact)
-        if len(text) > 10000:
-            compact = list(dict.fromkeys(
-                f'[{c.claim_index + 1}] {c.coordinates.source_path}, {c.section} ({c.edition}).'
-                for c in answer.citations
-            ))
-            text = answer.text + "\nОснования:\n" + "\n".join(compact)
     if not text.strip() or len(text) > 10000:
         # Не обрезаем условие/исключение вместе с концом длинного ответа.
         raise SubmissionError("Ответ превышает лимит CSV")

@@ -1,0 +1,15 @@
+{
+  "answer_claim_indices": [0],
+  "supported": [0, 1],
+  "checks": [
+    {"index": 0, "status": "confirmed", "relevance": "direct", "excluded_fragments": [], "duplicate_of": null},
+    {"index": 1, "status": "confirmed", "relevance": "direct", "excluded_fragments": [], "duplicate_of": 0},
+    {"index": 2, "status": "confirmed", "relevance": "unrequested", "excluded_fragments": [], "duplicate_of": null}
+  ],
+  "coverage": [
+    {"part_index": 0, "status": "partial", "claim_indices": [0], "needs_clarification": true, "missing_info": ["Дата документа"]}
+  ],
+  "clarifications": [
+    {"question": "Когда подписан документ?", "part_indices": [0]}
+  ]
+}

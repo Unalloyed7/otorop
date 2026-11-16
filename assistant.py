@@ -82,6 +82,20 @@ standard_form_unchanged=true; прошлые ответы ассистента �
 
 DRAFT_PROMPT = BOUNDARY + """
 Сформируй краткий ответ по evidence и последней реплике. Желательно до 150 слов.
+Пиши как юрист, отвечающий коллеге: начни с прямого ответа на ситуацию, затем
+объясни причину и практический следующий шаг. claim.text — законченные человеческие
+предложения, а не выписки из закона. Применяй правило к уже известным обстоятельствам.
+Точные цитаты помещай в supports; не повторяй их канцелярским языком в тексте ответа.
+Если правило уже объясняет решение в конкретной ситуации, не добавляй его отдельный
+абстрактный пересказ до или после этого решения. Один claim может состоять из решения
+и его короткого обоснования: это одна мысль, а не два повторяющих друг друга вывода.
+Сохраняй все юридически существенные условия, границы, даты и исключения.
+Не добавляй незапрошенные санкции, риски и соседние темы, если без них можно полно
+и правильно ответить на вопрос. Наличие похожей нормы в evidence этого не разрешает.
+Не придумывай совершённые действия и состояние процессов у пользователя. Предлагая
+следующий шаг или текст сообщения, не выдавай предполагаемые действия за выполненные.
+Если источник допускает несколько способов, предложи конкретный способ как вариант
+(«можно», «например»), а не как единственную обязанность («необходимо», «требуется»).
 Каждый существенный вывод — отдельный claim.text с supports (точная подстрока text
 в указанном document_id/chunk_id) и addresses (индексы parts с нуля).
 Выбирай достаточно полные цитаты: не теряй условия, исключения, основания и соседние
@@ -116,9 +130,43 @@ VERIFY_PROMPT = BOUNDARY + """
 Независимо проверь claims по ВСЕМ evidence, filters, истории и parts.
 Учитывай metadata.applicability_status: not_applicable не разрешает безусловно
 применять изменение, unknown не доказывает выполнение условий.
-Верни в supported ВСЕ полностью подтверждённые claims; неподтверждённые не включай.
-Оцени каждый независимо, даже если несколько выводов отвечают на один подвопрос.
-Не выбирай только одну лучшую формулировку из нескольких правильных.
+Проверь каждый claim независимо. В checks заполни relevance: direct — отвечает
+на вопрос; necessary — необходим для правильного ответа; unrequested — дополнительное
+утверждение, без которого ответ остаётся полным. Последнее не публикуется.
+Оцени КАЖДУЮ правовую или фактическую часть claim, а не только начало предложения.
+В excluded_fragments перечисли подстроки, которые добавляют незапрошенное последствие
+или недоказанный факт. Если нужный вывод соединён с ненужным, relevance=direct
+не разрешает пропустить добавку: весь смешанный claim будет исключён, а нужный вывод
+сохранится отдельно. Подтверждённая цитата из соседней нормы не делает добавку нужной.
+Проверка необходимости: без этого последствия можно полностью ответить на исходные
+вопросы пользователя? Если да, не добавляй его в ответ. Для чистого claim верни [].
+Вопрос о том, как объяснить правило клиенту, не разрешает придумывать уже выполненные
+банком действия или требовать отдельную нормативную форму такого объяснения.
+Не добавляй незапрошенную ответственность, санкции, обязанности и предупреждения.
+Совпадение цитаты не доказывает применимость состава или правового последствия:
+проверь все его условия по фактам именно этого случая. При недоказанной применимости
+безусловный вывод получает insufficient, даже если такой текст есть в законе.
+Не превращай разрешённый способ в обязательный. Проверь модальность каждого
+утверждения: обязанность, возможность и практический вариант — разные выводы.
+Если необязательный способ выдан за обязанность, отметь эту часть в excluded_fragments.
+Смысловой дубль уже проверенного вывода отметь duplicate_of=claim_index более раннего
+вывода, сохранив статус проверки самого факта. Не объединяй разные условия, субъекты,
+редакции, суммы, сроки, отрицания или разные последствия одного условия.
+Если текущий вывод полнее раскрывает ТО ЖЕ правило, укажи subsumes=индекс более
+раннего менее полного вывода: программа оставит проверенную полную формулировку.
+Не путай это с разными правилами; duplicate_of используется, если более раннего
+вывода уже достаточно. В coverage указывай индексы после оценки содержания каждого.
+Отдельный пересказ правила после уже обоснованного применения к той же ситуации
+также является повтором, если не добавляет существенного условия или исключения.
+В supported верни подтверждённые выводы; значения индексов не изменяй.
+Отдельно в answer_claim_indices выбери МИНИМАЛЬНЫЙ ДОСТАТОЧНЫЙ набор для публикации.
+Подтверждённый факт не обязательно нужен в ответе. Если после удаления вывода все
+поставленные вопросы остаются раскрыты, не выбирай его. Сохрани необходимые разные
+правила, условия, исключения и обе стороны сравнения. Выбирай применённую к ситуации
+формулировку вместо абстрактного повтора. Текст программы уже является ответом:
+отдельная рекомендация «клиенту следует сообщить» не нужна, если она повторяет этот
+ответ или добавляет неподтверждённые обещания. coverage.claim_indices должны ссылаться
+на выбранные для ответа выводы, а не на все правильные факты из контекста.
 Индекс вывода — его claim_index, начиная с нуля; выбирай только значения из
 allowed_claim_indices. Не возвращай номер пункта документа, индекс parts/addresses
 или номер источника e1/e4. Если передан один claim с claim_index=0, supported
@@ -171,6 +219,15 @@ needs_clarification=true, evidence_available=false и укажи точный в
 не повторяй их в общем missing_info. draft_missing_info — предположения черновика,
 проверь их заново: после дополнения они могут быть устранены. Не требуй повторно
 факт, который пользователь уже явно указал или исключил в своей истории.
+Если нужны уточнения, заполни clarifications: question — один понятный вопрос или
+запрос документа без новых правовых утверждений; part_indices — все неполные части,
+которые он проясняет. Один неизвестный факт спрашивай один раз для нескольких частей.
+Пиши коротко и прямо, без вводных оборотов об исчерпывающей информации.
+question должен быть одним вопросительным предложением со знаком ? в конце,
+а не описанием того, что «необходимо уточнить» или «нужно проверить».
+Уточнения должны покрыть все неполные части, не затрагивая уже полностью отвеченные.
+Не требуй отдельной правовой нормы о форме ответа, если пользователь просит объяснить
+уже найденные положения обычным языком.
 """
 
 _RENEWAL_NOTE = """
@@ -481,6 +538,62 @@ def _claim_key(claim: Claim) -> str:
     return claim.model_dump_json()
 
 
+def _unique_sources(sources):
+    return list({(s.document_id, s.chunk_id, s.quote): s for s in sources}.values())
+
+
+def _clarifying_question(text):
+    # Questions cannot carry an unchecked legal explanation after the question.
+    # A plan with multiple questions per item is left to the coverage fallback.
+    question, separator, tail = text.strip().partition("?")
+    return question.strip() + "?" if separator and "?" not in tail else None
+
+
+def _coalesce_verified(claims, selected, checks, control, trace):
+    """Apply semantic equivalence only to verified facts with compatible context."""
+    kept, aliases = {}, {}
+    for i in sorted(selected):
+        claim = claims[i]
+        replacement = checks.get(i).subsumes if i in checks else None
+        duplicate = replacement if replacement is not None else (checks.get(i).duplicate_of if i in checks else None)
+        if duplicate is None:
+            text = " ".join(claim.text.split()).casefold()
+            duplicate = next((j for j, c in kept.items() if " ".join(c.text.split()).casefold() == text), None)
+        target = aliases.get(duplicate, duplicate)
+        if target not in kept or target >= i:
+            kept[i], aliases[i] = claim, i
+            continue
+        prior = kept[target]
+        a = control.statements[statement_key(prior)]
+        b = control.statements[statement_key(claim)]
+        values = ("amount", "currency", "duration", "unit", "day_type", "counted_from", "action")
+        conflicts = any(getattr(a.value, k) not in (None, "", "unspecified")
+                        and getattr(b.value, k) not in (None, "", "unspecified")
+                        and getattr(a.value, k) != getattr(b.value, k) for k in values)
+        supports = _unique_sources([*prior.supports, *claim.supports])
+        limitations = _unique_sources([*prior.limitations, *claim.limitations])
+        compatible_conditions = (all(c in b.conditions for c in a.conditions) if replacement is not None else a.conditions == b.conditions)
+        if (a.subject != b.subject or a.period != b.period or not compatible_conditions or conflicts
+            or (a.rule != b.rule and "information" not in {a.rule, b.rule})
+            or len(supports) > 8 or len(limitations) > 12):
+            kept[i], aliases[i] = claim, i
+            _record(trace, "duplicate_retained", index=i, reason="distinct context or values")
+            continue
+        merged = (claim if replacement is not None else prior).model_copy(update={"addresses": sorted(set(prior.addresses) | set(claim.addresses)),
+                                          "supports": supports, "limitations": limitations})
+        control.statements.pop(statement_key(prior), None)
+        control.statements.pop(statement_key(claim), None)
+        control.statements[statement_key(merged)] = (b if replacement is not None else a).model_copy(update={
+            "statement_id": statement_key(merged),
+            "supports": _unique_sources([*a.supports, *b.supports]),
+            "limitations": _unique_sources([*a.limitations, *b.limitations]),
+            "relations": list({r.relation_id: r for r in [*a.relations, *b.relations]}.values()),
+        })
+        kept[target], aliases[i] = merged, target
+        _record(trace, "semantic_subsumption" if replacement is not None else "semantic_duplicate", index=i, canonical_index=target)
+    return list(kept.values()), aliases
+
+
 def _retained_sources(claims, evidence, control):
     """Keep verified proof and its structural dependencies, not every search hit."""
     needed = set()
@@ -520,10 +633,15 @@ def _response(claims: list[Claim], gaps: list[str], evidence: list[Evidence], fi
     citations = validate_supports(draft, evidence, filters, intent.parts, temporal_mode=intent.temporal_mode, reference=reference)
     control = current_control()
     if control:
-        control.published = {statement_key(c) for c in claims}
-    text = "\n".join(f"{c.text} [{i+1}]" for i, c in enumerate(claims))
+        control.published_order = [statement_key(c) for c in claims]
+        control.published = set(control.published_order)
+    sentences = [f"{c.text} [{i+1}]" for i, c in enumerate(claims)]
+    text = " ".join(sentences) if len(sentences) <= 3 else sentences[0] + "\n\n" + " ".join(sentences[1:])
     if gaps:
-        text += "\nПодтверждена только указанная часть. Не хватает: " + "; ".join(gaps) + "."
+        planned = {" ".join(q.split()).rstrip(" .;:").casefold() for q in control.clarifications} if control else set()
+        questions = all(gap.endswith("?") or gap.casefold() in planned for gap in gaps)
+        text += "\n\n" + (" ".join(gap if gap.endswith(("?", "!")) else gap + "." for gap in gaps)
+                            if questions else "Для окончательного вывода нужно уточнить: " + "; ".join(gaps) + ".")
     return Answer(status="partial" if gaps else "answer", text=text, citations=citations, missing_info=gaps)
 
 
@@ -538,7 +656,9 @@ class LegalAssistant:
         with controlled_run(control):
             result = await self._run_answer(messages, as_of, trace, scenario)
             published = getattr(control, "published", set())
-            result.statements = [s.model_copy(update={"published": key in published and s.check.status in {"confirmed", "conditional"}}) for key, s in control.statements.items()]
+            ordered = [*control.published_order, *(key for key in control.statements if key not in published)]
+            result.statements = [control.statements[key].model_copy(update={"published": key in published and control.statements[key].check.status in {"confirmed", "conditional"}})
+                                 for key in ordered if key in control.statements]
             result.scenario = getattr(control, "scenario", ScenarioDates())
             result.verification = control.summary()
             _record(trace, "result", answer=result.model_dump(mode="json"))
@@ -574,7 +694,8 @@ class LegalAssistant:
             if retained:
                 gap = "Дополнительная проверка прервана технической ошибкой или лимитом; полнота оснований и ограничений не установлена"
                 control.published = {key for key, _ in retained}
-                result = Answer(status="partial", text="\n".join(f"{s.text} [{i+1}]" for i, (_, s) in enumerate(retained)) + "\n" + gap + ".",
+                control.published_order = [key for key, _ in retained]
+                result = Answer(status="partial", text=" ".join(f"{s.text} [{i+1}]" for i, (_, s) in enumerate(retained)) + "\n\n" + gap + ".",
                                 citations=[c.model_copy(update={"claim_index": i}) for i, (_, s) in enumerate(retained) for c in s.supports],
                                 missing_info=[gap])
         return result
@@ -595,7 +716,9 @@ class LegalAssistant:
         for attempt in range(2):
             indices = [c.index for c in verdict.checks] if verdict.checks else verdict.supported
             error = None
-            if len(indices) != len(set(indices)) or any(i < 0 or i >= count for i in indices):
+            if count and not verdict.checks:
+                error = "Нужны checks с relevance и excluded_fragments для каждого вывода"
+            elif len(indices) != len(set(indices)) or any(i < 0 or i >= count for i in indices):
                 error = "Индексы утверждений должны быть уникальными и принадлежать диапазону 0.." + str(count-1)
             elif verdict.checks and set(indices) != set(range(count)):
                 error = "Нужен один checks для каждого из индексов: " + str(list(range(count)))
@@ -605,9 +728,15 @@ class LegalAssistant:
                     error = "Нужен один coverage для каждой части вопроса с part_index от нуля"
                 else:
                     selected = {c.index for c in verdict.checks if c.status in {"confirmed", "conditional"}} if verdict.checks else set(verdict.supported)
+                    answer_indices = verdict.answer_claim_indices
+                    if len(answer_indices) != len(set(answer_indices)) or any(i not in selected for i in answer_indices):
+                        error = "answer_claim_indices должны быть уникальными индексами подтверждённых выводов"
                     for part, c in coverage.items():
                         if len(c.claim_indices) != len(set(c.claim_indices)) or any(i not in selected for i in c.claim_indices):
                             error = "coverage.claim_indices должны указывать подтверждённые выводы"
+                        relevant = {check.index for check in verdict.checks if check.relevance != "unrequested" and not check.excluded_fragments}
+                        if c.status == "complete" and any(i in relevant and i not in answer_indices for i in c.claim_indices):
+                            error = "Полная часть coverage должна ссылаться только на answer_claim_indices; сохрани все необходимые условия"
             if error is None:
                 return verdict.model_copy(update={"coverage": [
                     c.model_copy(update={"status": "missing" if not c.claim_indices else "partial"})
@@ -657,7 +786,8 @@ class LegalAssistant:
                                        for i, claim in enumerate(valid)],
                             "allowed_claim_indices": list(range(len(valid)))}
             verdict = await self._verdict(verification, len(valid))
-            selected = [c.index for c in verdict.checks if c.status in {"confirmed", "conditional"}] if verdict.checks else verdict.supported
+            chosen_for_answer = set(verdict.answer_claim_indices)
+            selected = [c.index for c in verdict.checks if c.index in chosen_for_answer and c.status in {"confirmed", "conditional"} and c.relevance != "unrequested" and not c.excluded_fragments]
             if len(set(selected)) != len(selected) or any(i < 0 or i >= len(valid) for i in selected):
                 raise ModelProtocolError("verify: некорректные индексы выводов")
             checks = {c.index: c for c in verdict.checks}
@@ -668,7 +798,13 @@ class LegalAssistant:
                 addressed = {p.part_index for p in verdict.coverage if i in p.claim_indices}
                 claim = claim.model_copy(update={"addresses": sorted(set(claim.addresses) | addressed)})
                 valid[i] = claim
-                semantic = checks.get(i) or SemanticCheck(index=i, status="confirmed" if i in selected else "insufficient", reasons=[] if i in selected else ["Модель не подтвердила вывод"])
+                semantic = checks.get(i) or SemanticCheck(index=i, status="insufficient", relevance="direct", excluded_fragments=[], reasons=["Модель не подтвердила вывод"])
+                outside = (semantic.relevance == "unrequested" or bool(semantic.excluded_fragments)
+                           or (semantic.status in {"confirmed", "conditional"} and i not in chosen_for_answer))
+                if outside:
+                    semantic = semantic.model_copy(update={"status": "insufficient", "limitations": [],
+                        "reasons": [*semantic.reasons, "Дополнительный вывод не нужен для ответа на вопрос"]})
+                    _record(trace, "unrequested_claim", index=i)
                 auxiliary = claim.model_copy(update={"supports": [], "conditions": [], "limitations": semantic.limitations})
                 recovered = _recover_claim_quotes(auxiliary, evidence).limitations
                 primary = {(s.document_id, s.chunk_id) for s in claim.supports}
@@ -696,24 +832,44 @@ class LegalAssistant:
                 except CitationError as exc:
                     invalid.append(claim)
                     failures.append(str(exc))
-                    semantic = SemanticCheck(index=i, status="insufficient", reasons=[str(exc)])
+                    semantic = SemanticCheck(index=i, status="insufficient", relevance="direct", excluded_fragments=[], reasons=[str(exc)])
                     statement = build_statement(claim.model_copy(update={"limitations": [], "conditions": []}), evidence, filters, mechanical=False, semantic=semantic)
                     selected = [n for n in selected if n != i]
                 if control:
                     control.statements[statement_key(claim)] = statement
-                if any(c.status == "unknown" for c in statement.conditions):
+                if not outside and any(c.status == "unknown" for c in statement.conditions):
                     condition_gaps.append((set(claim.addresses), "Не установлены условия: " + "; ".join(c.text for c in statement.conditions if c.status == "unknown")))
-                if any(c.status == "not_met" for c in statement.conditions):
+                if not outside and any(c.status == "not_met" for c in statement.conditions):
                     condition_gaps.append((set(claim.addresses), "Условие не выполнено; нужно основание для текущего сценария: " + "; ".join(c.text for c in statement.conditions if c.status == "not_met")))
-                if i not in selected:
+                if i not in selected and not outside:
                     dropped.update(claim.addresses)
                     _record(trace, "rejected_claim", index=i, reason="semantic verifier", addresses=claim.addresses)
-            valid = [c for i, c in enumerate(valid) if i in selected]
+            valid, aliases = _coalesce_verified(valid, selected, checks, control, trace)
+            adjusted = []
+            for part in verdict.coverage:
+                relevant = [i for i in part.claim_indices if i in chosen_for_answer and (i not in checks or (checks[i].relevance != "unrequested" and not checks[i].excluded_fragments))]
+                surviving = list(dict.fromkeys(aliases[i] for i in relevant if i in aliases))
+                lost = any(i not in selected for i in relevant)
+                status = part.status
+                missing = list(part.missing_info)
+                if status == "complete" and (lost or not surviving):
+                    status = "partial" if surviving else "missing"
+                    missing = missing or [intent.parts[part.part_index]]
+                adjusted.append(part.model_copy(update={"claim_indices": surviving, "status": status, "missing_info": missing}))
+            verdict = verdict.model_copy(update={"coverage": adjusted})
             incomplete = [c for c in verdict.coverage if c.status != "complete"]
             detailed = [p for c in incomplete for p in c.missing_info]
             gaps = ([p for c in incomplete for p in (c.missing_info or [intent.parts[c.part_index]])]
                     if detailed else verdict.missing_info or [intent.parts[c.part_index] for c in incomplete])
             described = {c.part_index for c in incomplete if c.missing_info}
+            required = {c.part_index for c in incomplete}
+            asked = {p for question in verdict.clarifications for p in question.part_indices}
+            questions = [_clarifying_question(q.question) for q in verdict.clarifications]
+            control.clarifications = []
+            if (required and asked == required and all(questions) and all(set(q.part_indices) <= required for q in verdict.clarifications)):
+                gaps = list(dict.fromkeys(questions))
+                control.clarifications = list(gaps)
+                described = required
             gaps += [message for parts, message in condition_gaps if not parts.intersection(described)]
             if control:
                 control.incomplete_parts = [c.part_index for c in verdict.coverage if c.status != "complete"]
