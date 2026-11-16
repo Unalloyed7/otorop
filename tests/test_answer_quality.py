@@ -192,3 +192,53 @@ async def test_foreign_edition_as_ground_gets_bounded_repair(settings, evidence)
     result = await LegalAssistant(FakeSearch([old, new]), client).answer("Какое правило в феврале 2025?")
     assert result.status == "answer" and result.citations[0].document_id == old.document_id
     assert result.verification["repair_calls"] == 1
+
+
+async def test_recovery_frees_full_context_but_keeps_verified_proof_and_ancestors(settings, evidence):
+    from schemas import SearchResult
+    from test_answer_recovery import SequentialSearch, claim, warranty
+    parent = evidence.model_copy(update={"chunk_id": "contract:heading", "text": "Условия оплаты и гарантии."})
+    primary = evidence.model_copy(update={"metadata": {"ancestor_chunk_ids": [parent.chunk_id]}})
+    noise = [evidence.model_copy(update={"document_id": f"unused-{i}", "chunk_id": f"unused-{i}",
+                                      "text": "Посторонние положения."}) for i in range(2)]
+    extra = warranty(evidence)
+    search = SequentialSearch(SearchResult(evidence=[primary, parent, *noise]), SearchResult(evidence=[extra]))
+    plan = intent().model_copy(update={"parts": ["Оплата", "Гарантия"]})
+    client = FakeClient(settings.model_copy(update={"top_k": 2}), plan,
+        {"status": "partial", "claims": [claim(primary)], "missing_info": ["Гарантия"]},
+        {"supported": [0]},
+        {"supported": [0], "coverage": [
+            {"part_index": 0, "status": "complete", "claim_indices": [0]},
+            {"part_index": 1, "status": "missing", "evidence_available": True, "missing_info": ["Гарантия"]},
+        ]},
+        {"status": "answer", "claims": [claim(extra, "Гарантийный срок составляет 24 месяца с даты поставки.", 1)]},
+        {"supported": [0, 1]})
+    trace = {}
+    answer = await LegalAssistant(search, client).answer("Оплата и гарантия?", trace=trace)
+    assert answer.status == "answer" and len(answer.citations) == 2
+    assert {e["chunk_id"] for e in client.requests[3][1]["evidence"]} == {
+        primary.chunk_id, parent.chunk_id, extra.chunk_id,
+    }
+    assert search.requests[1][1]["anchor_document_ids"] == [primary.document_id]
+    assert next(s for s in trace["stages"] if s["stage"] == "context_retention") == {
+        "stage": "context_retention", "retained": 2, "released": 2,
+    }
+
+
+async def test_complete_without_proof_is_missing_part_not_protocol_failure(settings, evidence):
+    from test_answer_recovery import claim, warranty
+    extra = warranty(evidence)
+    plan = intent().model_copy(update={"parts": ["Оплата", "Гарантия"]})
+    client = FakeClient(settings, plan,
+        {"status": "answer", "claims": [claim(evidence)]},
+        {"supported": [0], "coverage": [
+            {"part_index": 0, "status": "complete", "claim_indices": [0]},
+            {"part_index": 1, "status": "complete", "claim_indices": [],
+             "evidence_available": True, "missing_info": ["Гарантия"]},
+        ]},
+        {"status": "answer", "claims": [claim(extra, "Гарантийный срок составляет 24 месяца с даты поставки.", 1)]},
+        {"supported": [0, 1]})
+    answer = await LegalAssistant(FakeSearch([evidence, extra]), client).answer("Оплата и гарантия?")
+    assert answer.status == "answer" and len(answer.citations) == 2
+    assert [r[2].__name__ for r in client.requests] == ["Intent", "Draft", "Verdict", "Draft", "Verdict"]
+    assert answer.verification["repair_calls"] == 1
