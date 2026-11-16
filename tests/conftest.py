@@ -27,6 +27,9 @@ def with_coverage(response, data):
             seen.add(i)
     if "checks" in response:
         response["checks"] = [{"relevance": "direct", "excluded_fragments": [], **c} for c in response["checks"]]
+    if "answer_claim_indices" not in response:
+        response["answer_claim_indices"] = [c["index"] for c in response.get("checks", [])
+            if c["status"] in {"confirmed", "conditional"} and c["relevance"] != "unrequested" and not c["excluded_fragments"]]
     if "coverage" in response:
         return response
     selected = {c["index"] for c in response["checks"] if c["status"] in {"confirmed", "conditional"}} if response.get("checks") else set(response.get("supported", []))

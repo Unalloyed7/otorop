@@ -331,6 +331,7 @@ class Clarification(Model):
 
 
 class Verdict(Model):
+    answer_claim_indices: list[StrictInt]
     supported: list[StrictInt] = Field(default_factory=list)
     missing_info: list[str] = Field(default_factory=list)
     checks: list["SemanticCheck"] = Field(default_factory=list)

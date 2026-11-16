@@ -159,6 +159,14 @@ VERIFY_PROMPT = BOUNDARY + """
 Отдельный пересказ правила после уже обоснованного применения к той же ситуации
 также является повтором, если не добавляет существенного условия или исключения.
 В supported верни подтверждённые выводы; значения индексов не изменяй.
+Отдельно в answer_claim_indices выбери МИНИМАЛЬНЫЙ ДОСТАТОЧНЫЙ набор для публикации.
+Подтверждённый факт не обязательно нужен в ответе. Если после удаления вывода все
+поставленные вопросы остаются раскрыты, не выбирай его. Сохрани необходимые разные
+правила, условия, исключения и обе стороны сравнения. Выбирай применённую к ситуации
+формулировку вместо абстрактного повтора. Текст программы уже является ответом:
+отдельная рекомендация «клиенту следует сообщить» не нужна, если она повторяет этот
+ответ или добавляет неподтверждённые обещания. coverage.claim_indices должны ссылаться
+на выбранные для ответа выводы, а не на все правильные факты из контекста.
 Индекс вывода — его claim_index, начиная с нуля; выбирай только значения из
 allowed_claim_indices. Не возвращай номер пункта документа, индекс parts/addresses
 или номер источника e1/e4. Если передан один claim с claim_index=0, supported
@@ -720,9 +728,15 @@ class LegalAssistant:
                     error = "Нужен один coverage для каждой части вопроса с part_index от нуля"
                 else:
                     selected = {c.index for c in verdict.checks if c.status in {"confirmed", "conditional"}} if verdict.checks else set(verdict.supported)
+                    answer_indices = verdict.answer_claim_indices
+                    if len(answer_indices) != len(set(answer_indices)) or any(i not in selected for i in answer_indices):
+                        error = "answer_claim_indices должны быть уникальными индексами подтверждённых выводов"
                     for part, c in coverage.items():
                         if len(c.claim_indices) != len(set(c.claim_indices)) or any(i not in selected for i in c.claim_indices):
                             error = "coverage.claim_indices должны указывать подтверждённые выводы"
+                        relevant = {check.index for check in verdict.checks if check.relevance != "unrequested" and not check.excluded_fragments}
+                        if c.status == "complete" and any(i in relevant and i not in answer_indices for i in c.claim_indices):
+                            error = "Полная часть coverage должна ссылаться только на answer_claim_indices; сохрани все необходимые условия"
             if error is None:
                 return verdict.model_copy(update={"coverage": [
                     c.model_copy(update={"status": "missing" if not c.claim_indices else "partial"})
@@ -772,7 +786,8 @@ class LegalAssistant:
                                        for i, claim in enumerate(valid)],
                             "allowed_claim_indices": list(range(len(valid)))}
             verdict = await self._verdict(verification, len(valid))
-            selected = [c.index for c in verdict.checks if c.status in {"confirmed", "conditional"} and c.relevance != "unrequested" and not c.excluded_fragments]
+            chosen_for_answer = set(verdict.answer_claim_indices)
+            selected = [c.index for c in verdict.checks if c.index in chosen_for_answer and c.status in {"confirmed", "conditional"} and c.relevance != "unrequested" and not c.excluded_fragments]
             if len(set(selected)) != len(selected) or any(i < 0 or i >= len(valid) for i in selected):
                 raise ModelProtocolError("verify: некорректные индексы выводов")
             checks = {c.index: c for c in verdict.checks}
@@ -784,7 +799,8 @@ class LegalAssistant:
                 claim = claim.model_copy(update={"addresses": sorted(set(claim.addresses) | addressed)})
                 valid[i] = claim
                 semantic = checks.get(i) or SemanticCheck(index=i, status="insufficient", relevance="direct", excluded_fragments=[], reasons=["Модель не подтвердила вывод"])
-                outside = semantic.relevance == "unrequested" or bool(semantic.excluded_fragments)
+                outside = (semantic.relevance == "unrequested" or bool(semantic.excluded_fragments)
+                           or (semantic.status in {"confirmed", "conditional"} and i not in chosen_for_answer))
                 if outside:
                     semantic = semantic.model_copy(update={"status": "insufficient", "limitations": [],
                         "reasons": [*semantic.reasons, "Дополнительный вывод не нужен для ответа на вопрос"]})
@@ -831,7 +847,7 @@ class LegalAssistant:
             valid, aliases = _coalesce_verified(valid, selected, checks, control, trace)
             adjusted = []
             for part in verdict.coverage:
-                relevant = [i for i in part.claim_indices if i not in checks or (checks[i].relevance != "unrequested" and not checks[i].excluded_fragments)]
+                relevant = [i for i in part.claim_indices if i in chosen_for_answer and (i not in checks or (checks[i].relevance != "unrequested" and not checks[i].excluded_fragments))]
                 surviving = list(dict.fromkeys(aliases[i] for i in relevant if i in aliases))
                 lost = any(i not in selected for i in relevant)
                 status = part.status

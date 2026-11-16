@@ -161,3 +161,14 @@ async def test_follow_up_cannot_append_unchecked_legal_explanation(settings, evi
     answer = await LegalAssistant(FakeSearch([evidence]), client).answer("Когда платить?")
     assert answer.status == "partial" and answer.missing_info == [question]
     assert answer.text.endswith(question) and "90 дней" not in answer.text
+
+
+async def test_true_but_unselected_recommendation_is_not_published(settings, evidence):
+    main = draft(evidence)["claims"][0]
+    extra = draft(evidence, text="Для оплаты можно настроить отдельное платёжное поручение.")["claims"][0]
+    client = FakeClient(settings, intent(), {"status": "answer", "claims": [main, extra]},
+        {"answer_claim_indices": [0], "checks": [check(0), check(1)],
+         "coverage": [{"part_index": 0, "status": "complete", "claim_indices": [0]}]})
+    answer = await LegalAssistant(FakeSearch([evidence]), client).answer("Какой срок оплаты?")
+    assert answer.status == "answer" and answer.text == main["text"] + " [1]"
+    assert all(s.text != extra["text"] for s in answer.statements if s.published)
