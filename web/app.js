@@ -196,7 +196,7 @@
     copy.type = "button";
     copy.addEventListener("click", async () => {
       const sources = citations.map((c) =>
-        `${c.document_title}, ${c.section} (${c.edition}). «${c.quote}»`).join("\n");
+        `[${c.claim_index + 1}] ${c.document_title}, ${c.section} (${c.edition}).`).join("\n");
       try {
         await navigator.clipboard.writeText(message.content + (sources ? "\n\nОснования:\n" +
           sources : ""));

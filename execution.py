@@ -18,10 +18,13 @@ class RunControl:
     reserved_model_calls: int = 0
     observer: object = None
     statements: dict = field(default_factory=dict)
+    published: set = field(default_factory=set)
+    published_order: list = field(default_factory=list)
     query_parts_omitted: list = field(default_factory=list)
     limitation_search_done: bool = False
     incomplete_parts: list[int] = field(default_factory=list)
     clarification_needed: bool = False
+    clarifications: list = field(default_factory=list)
 
     def model(self, schema):
         if self.models >= self.max_models:

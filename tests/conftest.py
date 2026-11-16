@@ -14,6 +14,19 @@ def with_coverage(response, data):
 
     This is fixture data, not a semantic evaluator. Live quality is tested separately.
     """
+    response = dict(response)
+    if "checks" not in response and "supported" in response:
+        selected = response["supported"]
+        count = len(data.get("claims", []))
+        response["checks"] = [{"index": i, "status": "confirmed" if i in selected else "insufficient"}
+                              for i in range(count)]
+        seen = set()
+        for i in selected:
+            if type(i) is not int or i < 0 or i >= count or i in seen:
+                response["checks"].append({"index": i, "status": "confirmed"})
+            seen.add(i)
+    if "checks" in response:
+        response["checks"] = [{"relevance": "direct", "excluded_fragments": [], **c} for c in response["checks"]]
     if "coverage" in response:
         return response
     selected = {c["index"] for c in response["checks"] if c["status"] in {"confirmed", "conditional"}} if response.get("checks") else set(response.get("supported", []))
