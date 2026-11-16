@@ -103,7 +103,8 @@ async def test_search_retry_can_be_disabled(settings):
 
 async def test_no_new_chunks_means_no_second_generation(settings, evidence):
     search = FakeSearch([evidence])
-    client = FakeClient(settings, intent(), draft(evidence, status="partial", missing_info=["Гарантия"]), {"supported": [0]})
+    client = FakeClient(settings, intent().model_copy(update={"parts": ["Оплата", "Гарантия"]}),
+                        draft(evidence, status="partial", missing_info=["Гарантия"]), {"supported": [0]})
     result = await LegalAssistant(search, client).answer("Вопрос")
     assert result.status == "partial"
     assert len(search.requests) == 2 and len(client.requests) == 3
@@ -204,7 +205,9 @@ async def test_explicit_year_period_is_usable(settings, evidence):
 
 async def test_known_part_with_user_clarification_still_scans_limitations(settings, evidence):
     search = SequentialSearch(SearchResult(evidence=[evidence]), SearchResult(evidence=[evidence]))
-    client = FakeClient(settings, intent(), draft(evidence, status="clarify", missing_info=["Дата подписания спецификации"]), {"supported": [0]})
+    client = FakeClient(settings, intent(), draft(evidence, status="clarify", missing_info=["Дата подписания спецификации"]),
+                        {"supported": [0], "coverage": [{"part_index": 0, "status": "partial", "claim_indices": [0],
+                          "missing_info": ["Дата подписания спецификации"], "needs_clarification": True}]})
     result = await LegalAssistant(search, client).answer("Вопрос")
     assert result.status == "partial" and result.citations
     assert len(search.requests) == 2

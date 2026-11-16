@@ -242,3 +242,44 @@ async def test_complete_without_proof_is_missing_part_not_protocol_failure(setti
     assert answer.status == "answer" and len(answer.citations) == 2
     assert [r[2].__name__ for r in client.requests] == ["Intent", "Draft", "Verdict", "Draft", "Verdict"]
     assert answer.verification["repair_calls"] == 1
+
+
+@pytest.mark.parametrize("title", ["Порядок закупок", "Регламент аренды", "Правила согласования"])
+@pytest.mark.parametrize("confirmed", [True, False])
+async def test_comparison_of_editions_routes_sources_but_still_requires_semantic_check(settings, evidence, title, confirmed):
+    from datetime import date
+    old = evidence.model_copy(update={"document_title": title, "metadata": {"document_type": "internal_policy"},
+        "applicability": evidence.applicability.model_copy(update={"valid_from": date(2020, 1, 1), "valid_to": date(2026, 1, 1), "date_kind": "event"})})
+    new = old.model_copy(update={"document_id": "next-edition", "chunk_id": "next:1",
+        "applicability": old.applicability.model_copy(update={"valid_from": date(2026, 1, 1), "valid_to": None})})
+    response = draft(old, text="Применяется предыдущая редакция; новая ещё не вступила в силу.")
+    response["claims"][0]["supports"].extend(draft(new)["claims"][0]["supports"])
+    client = FakeClient(settings, intent(filters=SearchFilters(event_date="2025-06-17", date_kind="event"), temporal_mode="historical"),
+                        response, {"supported": [0] if confirmed else []})
+    answer = await LegalAssistant(FakeSearch([old, new]), client).answer("Какая редакция применялась?")
+    assert answer.status == ("answer" if confirmed else "insufficient")
+    assert [r[2].__name__ for r in client.requests] == ["Intent", "Draft", "Verdict"]
+    verified = client.requests[2][1]["claims"][0]
+    assert [s["chunk_id"] for s in verified["supports"]] == [old.chunk_id]
+    assert [s["chunk_id"] for s in verified["limitations"]] == [new.chunk_id]
+    if confirmed:
+        assert answer.citations[0].document_id == old.document_id
+        assert answer.statements[0].limitations[0].role == "other_edition"
+
+
+async def test_verified_complete_answer_does_not_retain_stale_draft_gaps(settings, evidence):
+    client = FakeClient(settings, intent(), draft(evidence, status="partial", missing_info=["Устаревшее предположение черновика"]),
+                        {"supported": [0]})
+    answer = await LegalAssistant(FakeSearch([evidence]), client).answer("Срок оплаты?")
+    assert answer.status == "answer" and not answer.missing_info
+    assert client.requests[2][1]["draft_missing_info"] == ["Устаревшее предположение черновика"]
+
+
+async def test_partial_gap_is_reported_once_from_verified_part(settings, evidence):
+    client = FakeClient(settings, intent(), draft(evidence, status="partial", missing_info=["Дата документа"]),
+        {"supported": [0], "missing_info": ["Нужно сообщить дату документа"], "coverage": [
+            {"part_index": 0, "status": "partial", "claim_indices": [0], "needs_clarification": True,
+             "missing_info": ["Когда подписан документ?"]},
+        ]})
+    answer = await LegalAssistant(FakeSearch([evidence]), client).answer("Когда платить?")
+    assert answer.status == "partial" and answer.missing_info == ["Когда подписан документ?"]
