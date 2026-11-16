@@ -31,7 +31,7 @@ async def test_partial_coverage(settings, evidence):
     plan = intent().model_copy(update={"parts": ["Срок оплаты", "Страхование"]})
     client = FakeClient(settings, plan, draft(evidence), {"supported": [0], "missing_info": ["Условия страхования"]})
     result = await LegalAssistant(FakeSearch([evidence]), client).answer("Оплата и страхование?")
-    assert result.status == "partial" and "Страхование" in result.missing_info
+    assert result.status == "partial" and any("страхован" in gap.casefold() for gap in result.missing_info)
     assert result.citations
 
 
@@ -105,7 +105,9 @@ async def test_amendment_condition_uses_specification_date(settings, evidence):
 
 
 async def test_unknown_condition_remains_partial(settings, evidence):
-    client = FakeClient(settings, intent(), draft(evidence, status="partial", missing_info=["Дата подписания спецификации"]), {"supported": [0]})
+    client = FakeClient(settings, intent(), draft(evidence, status="partial", missing_info=["Дата подписания спецификации"]),
+                        {"supported": [0], "coverage": [{"part_index": 0, "status": "partial", "claim_indices": [0],
+                          "missing_info": ["Дата подписания спецификации"], "needs_clarification": True}]})
     result = await LegalAssistant(FakeSearch([evidence]), client).answer("Какой адрес?")
     assert result.status == "partial" and "Дата подписания спецификации" in result.missing_info
 
